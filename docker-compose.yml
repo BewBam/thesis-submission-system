@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: thesis_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: thesis_portal
+      POSTGRES_USER: thesis_user
+      POSTGRES_PASSWORD: thesis_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: thesis_backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      JWT_SECRET: dev-secret-change-me
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: thesis_frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  pg_data:
