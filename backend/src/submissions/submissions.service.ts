@@ -204,7 +204,7 @@ export class SubmissionsService {
             ? error.message
             : "Unknown error";
       throw new InternalServerErrorException(
-        process.env.NODE_ENV === "production" ? "Unable to store submission" : `Unable to store submission: ${message}`
+        `Unable to store submission: ${message}`
       );
     }
 
