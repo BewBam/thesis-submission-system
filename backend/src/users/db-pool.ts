@@ -1,6 +1,9 @@
 import { Pool } from "pg";
 
 export function createPgPool() {
+  console.log("DATABASE_URL exists:", !!process.env.DATABASE_URL);
+  console.log("NODE_ENV:", process.env.NODE_ENV);
+
   if (process.env.DATABASE_URL) {
     return new Pool({
       connectionString: process.env.DATABASE_URL,
