@@ -2,6 +2,7 @@
 
 Tai lieu tham chieu: `tai-lieu-thiet-ke-he-thong.md`
 Bien ban Sprint 0: `sprint-0-deliverables.md`
+Ghi chu pham vi hien tai: tam chua goi API DSpace, uu tien frontend/backend truoc.
 
 ## Sprint 0 - Khoi dong va thiet ke (1 tuan)
 
@@ -16,7 +17,7 @@ Bien ban Sprint 0: `sprint-0-deliverables.md`
 - [x] Xac nhan actor va use case chinh (student/reviewer/admin)
 - [x] Chot mo hinh du lieu: `submissions`, `submission_files`, `reviews`
 - [x] Chot mapping metadata sang Dublin Core
-- [x] Chot quy trinh review: pending -> approved/rejected
+- [x] Chot quy trinh review: reviewing -> approving -> approved/reject
 - [x] Chot phuong an storage (S3/local/DSpace storage)
 
 ### Dau ra sprint
@@ -54,10 +55,12 @@ Bien ban Sprint 0: `sprint-0-deliverables.md`
 
 ### Cong viec chinh
 
-- [ ] Xay dung form nhap metadata (`title`, `author`, `advisor`, `abstract`, `keywords`)
+- [ ] Xay dung form nhap metadata (`title`, `abstract`, `keywords`)
+- [ ] Tu dong lay `author` tu ho so tai khoan role `student`
+- [ ] Tu dong lay `advisor` tu ho so tai khoan role `reviewer` duoc gan voi bai nop
 - [ ] Upload file PDF va phu luc
 - [ ] Validate metadata va dinh dang file
-- [ ] Luu metadata vao DB voi trang thai `pending`
+- [ ] Luu metadata vao DB voi trang thai `reviewing`
 - [ ] Luu file tam hoac chuyen thang theo thiet ke
 - [ ] Hien thi thong bao nop thanh cong
 - [ ] Tao man hinh theo doi trang thai bai nop cho sinh vien
@@ -77,19 +80,21 @@ Bien ban Sprint 0: `sprint-0-deliverables.md`
 - [ ] Xay dung dashboard reviewer/admin
 - [ ] Hien thi danh sach bai nop theo trang thai
 - [ ] Chi tiet bai nop + file dinh kem
-- [ ] Action Approve
-- [ ] Action Reject + comment phan hoi
+- [ ] Reviewer Action Approve/Reject + comment phan hoi khi reject
+- [ ] Neu tat ca reviewer approve thi chuyen status sang `approving`
+- [ ] Admin Action Approve/Reject o buoc review lan cuoi
 - [ ] Cap nhat trang thai workflow trong DB
 
 ### Dau ra sprint
 
-- [ ] Quy trinh review hoat dong day du (pending -> approved/rejected)
+- [ ] Quy trinh review hoat dong day du (reviewing -> approving -> approved/reject)
 
-## Sprint 4 - Tich hop DSpace va cong bo (1-2 tuan)
+## Sprint 4 - Tich hop DSpace va cong bo (1-2 tuan) [PENDING - tam hoan]
 
 ### Muc tieu
 
 - [ ] Day bai duoc duyet len DSpace thanh cong
+- [ ] Kich hoat lai sprint nay sau khi frontend/backend dat muc tieu MVP on dinh
 
 ### Cong viec chinh
 

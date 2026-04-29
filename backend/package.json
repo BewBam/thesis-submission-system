@@ -11,14 +11,21 @@
     "@nestjs/common": "^10.4.12",
     "@nestjs/core": "^10.4.12",
     "@nestjs/jwt": "^10.2.0",
+    "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-express": "^10.4.12",
+    "@types/multer": "^2.1.0",
+    "@types/pg": "^8.20.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.2",
+    "passport": "^0.7.0",
+    "passport-jwt": "^4.0.1",
+    "pg": "^8.20.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.4.9",
+    "@types/passport-jwt": "^4.0.1",
     "@types/node": "^22.15.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3"

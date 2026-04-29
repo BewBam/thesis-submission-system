@@ -1,5 +1,7 @@
 # Sprint 1 Kickoff - Baseline Implementation
 
+Phan vi hien tai: tap trung frontend + backend, tam hoan tich hop API DSpace.
+
 ## Da thuc hien
 
 - Khoi tao `frontend` voi React + Ant Design + Vite.
@@ -13,6 +15,7 @@
 
 - HTTPS cho moi truong deploy (dang de open trong checklist Sprint 1).
 - Kiem thu chay thuc te bang container (`docker compose up --build`) tren may.
+- Cac luong goi API DSpace (de chuyen sang sprint tich hop sau).
 
 ## Tep lien quan
 

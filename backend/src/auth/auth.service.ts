@@ -10,8 +10,8 @@ export class AuthService {
     private readonly jwtService: JwtService
   ) {}
 
-  login(payload: LoginDto) {
-    const user = this.usersService.findByUsername(payload.username);
+  async login(payload: LoginDto) {
+    const user = await this.usersService.findByUsername(payload.username);
     if (!user || user.password !== payload.password) {
       throw new UnauthorizedException("Invalid username or password");
     }
@@ -19,6 +19,7 @@ export class AuthService {
     const accessToken = this.jwtService.sign({
       sub: user.id,
       username: user.username,
+      displayName: user.displayName,
       role: user.role
     });
 
@@ -27,6 +28,7 @@ export class AuthService {
       user: {
         id: user.id,
         username: user.username,
+        displayName: user.displayName,
         role: user.role
       }
     };

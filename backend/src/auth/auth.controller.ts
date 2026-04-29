@@ -7,7 +7,7 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post("login")
-  login(@Body() body: LoginDto) {
+  async login(@Body() body: LoginDto) {
     return this.authService.login(body);
   }
 }

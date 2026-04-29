@@ -23,6 +23,11 @@ services:
       NODE_ENV: development
       PORT: 3000
       JWT_SECRET: dev-secret-change-me
+      DB_HOST: postgres
+      DB_PORT: 5432
+      POSTGRES_DB: thesis_portal
+      POSTGRES_USER: thesis_user
+      POSTGRES_PASSWORD: thesis_pass
     ports:
       - "3000:3000"
     depends_on:
@@ -34,6 +39,8 @@ services:
       dockerfile: Dockerfile
     container_name: thesis_frontend
     restart: unless-stopped
+    environment:
+      API_PROXY_TARGET: http://backend:3000
     ports:
       - "5173:5173"
     depends_on:

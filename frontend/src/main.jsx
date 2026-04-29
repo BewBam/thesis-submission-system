@@ -5,7 +5,16 @@ import App from "./App";
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <ConfigProvider>
+    <ConfigProvider
+      theme={{
+        token: {
+          colorPrimary: "#1488D8",
+          colorInfo: "#1488D8",
+          colorLink: "#1488D8",
+          borderRadius: 10
+        }
+      }}
+    >
       <App />
     </ConfigProvider>
   </React.StrictMode>
