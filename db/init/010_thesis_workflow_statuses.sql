@@ -1,5 +1,5 @@
 -- Normalize thesis workflow statuses to:
--- reviewing -> approving -> approved / reject
+-- reviewing -> library_review -> approving -> approved / reject
 
 -- submissions.status
 ALTER TABLE submissions DROP CONSTRAINT IF EXISTS submissions_status_check;
@@ -12,7 +12,7 @@ SET status = CASE
 END;
 
 ALTER TABLE submissions
-  ADD CONSTRAINT submissions_status_check CHECK (status IN ('reviewing', 'approving', 'approved', 'reject'));
+  ADD CONSTRAINT submissions_status_check CHECK (status IN ('reviewing', 'library_review', 'approving', 'approved', 'reject'));
 
 -- reviews.status / reviews.decision
 ALTER TABLE reviews DROP CONSTRAINT IF EXISTS reviews_status_check;

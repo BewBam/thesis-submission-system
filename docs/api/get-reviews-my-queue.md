@@ -18,7 +18,13 @@ Mảng các bản ghi (join `reviews` + `submissions` + file), ví dụ các tr�
 | Trường (đại diện)   | Mô tả |
 | ------------------- | ----- |
 | `id`                | ID submission |
-| `title`             | Tiêu đề |
+| `title`             | Tiêu đề (legacy) |
+| `student_email`     | Email sinh viên |
+| `title_vi`          | Tiêu đề tiếng Việt |
+| `title_en`          | Tiêu đề tiếng Anh |
+| `thesis_advisors`   | Người hướng dẫn |
+| `major`             | Ngành |
+| `thesis_year`       | Năm |
 | `abstract`          | Tóm tắt |
 | `keywords`          | Từ khóa |
 | `author`            | Snapshot tác giả |

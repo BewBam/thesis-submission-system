@@ -14,9 +14,9 @@ Liệt kê người dùng theo vai trò (dùng cho giao diện chọn tác giả
 
 | Tham số | Kiểu   | Bắt buộc | Giá trị hợp lệ                          |
 | ------- | ------ | -------- | ---------------------------------------- |
-| `role`  | string | Có       | `student`, `reviewer`, hoặc `admin`    |
+| `role`  | string | Có       | `student`, `reviewer`, `library_staff`, `director`, hoặc `admin` |
 
-Nếu thiếu `role` hoặc giá trị không thuộc danh sách trên, server trả **400 Bad Request** với thông báo: `Query role must be one of: student, reviewer, admin`.
+Nếu thiếu `role` hoặc giá trị không thuộc danh sách trên, server trả **400 Bad Request** với thông báo liệt kê các role hợp lệ.
 
 ## Phản hồi thành công (200)
 

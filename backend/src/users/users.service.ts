@@ -1,7 +1,8 @@
 import { Injectable } from "@nestjs/common";
 import { createPgPool } from "./db-pool";
+import type { UserRole } from "./user-role";
 
-export type UserRole = "student" | "reviewer" | "admin";
+export type { UserRole } from "./user-role";
 
 export interface UserRecord {
   id: string;
@@ -9,6 +10,7 @@ export interface UserRecord {
   displayName: string;
   password: string;
   role: UserRole;
+  status: "active" | "disabled";
 }
 
 type UserRow = {
@@ -17,6 +19,7 @@ type UserRow = {
   password: string;
   display_name: string;
   role: UserRole;
+  status: "active" | "disabled";
 };
 
 function mapRow(row: UserRow): UserRecord {
@@ -25,7 +28,8 @@ function mapRow(row: UserRow): UserRecord {
     username: row.username,
     displayName: row.display_name,
     password: row.password,
-    role: row.role
+    role: row.role,
+    status: row.status ?? "active"
   };
 }
 
@@ -35,7 +39,7 @@ export class UsersService {
 
   async findByUsername(username: string): Promise<UserRecord | undefined> {
     const result = await this.db.query<UserRow>(
-      `SELECT id, username, password, display_name, role
+      `SELECT id, username, password, display_name, role, status
        FROM users
        WHERE lower(username) = lower($1)
        LIMIT 1`,
@@ -47,7 +51,7 @@ export class UsersService {
 
   async findById(id: string): Promise<UserRecord | undefined> {
     const result = await this.db.query<UserRow>(
-      `SELECT id, username, password, display_name, role
+      `SELECT id, username, password, display_name, role, status
        FROM users
        WHERE id = $1
        LIMIT 1`,
@@ -61,7 +65,7 @@ export class UsersService {
     const result = await this.db.query<Pick<UserRow, "id" | "username" | "display_name" | "role">>(
       `SELECT id, username, display_name, role
        FROM users
-       WHERE role = $1
+       WHERE role = $1 AND status = 'active'
        ORDER BY username ASC`,
       [role]
     );

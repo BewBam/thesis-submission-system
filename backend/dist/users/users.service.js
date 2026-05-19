@@ -15,7 +15,8 @@ function mapRow(row) {
         username: row.username,
         displayName: row.display_name,
         password: row.password,
-        role: row.role
+        role: row.role,
+        status: row.status ?? "active"
     };
 }
 let UsersService = class UsersService {
@@ -23,7 +24,7 @@ let UsersService = class UsersService {
         this.db = (0, db_pool_1.createPgPool)();
     }
     async findByUsername(username) {
-        const result = await this.db.query(`SELECT id, username, password, display_name, role
+        const result = await this.db.query(`SELECT id, username, password, display_name, role, status
        FROM users
        WHERE lower(username) = lower($1)
        LIMIT 1`, [username]);
@@ -31,7 +32,7 @@ let UsersService = class UsersService {
         return row ? mapRow(row) : undefined;
     }
     async findById(id) {
-        const result = await this.db.query(`SELECT id, username, password, display_name, role
+        const result = await this.db.query(`SELECT id, username, password, display_name, role, status
        FROM users
        WHERE id = $1
        LIMIT 1`, [id]);
@@ -41,7 +42,7 @@ let UsersService = class UsersService {
     async listByRole(role) {
         const result = await this.db.query(`SELECT id, username, display_name, role
        FROM users
-       WHERE role = $1
+       WHERE role = $1 AND status = 'active'
        ORDER BY username ASC`, [role]);
         return result.rows.map((row) => ({
             id: row.id,

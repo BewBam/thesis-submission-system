@@ -9,7 +9,7 @@ export declare class AuthController {
             id: string;
             username: string;
             displayName: string;
-            role: import("../users/users.service").UserRole;
+            role: "student" | "reviewer" | "library_staff" | "director" | "admin";
         };
     }>;
 }

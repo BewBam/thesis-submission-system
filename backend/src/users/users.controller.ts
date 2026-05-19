@@ -1,5 +1,6 @@
 import { BadRequestException, Controller, Get, Query } from "@nestjs/common";
-import { UserRole, UsersService } from "./users.service";
+import { USER_ROLES, isUserRole } from "./user-role";
+import { UsersService } from "./users.service";
 
 @Controller("users")
 export class UsersController {
@@ -7,10 +8,9 @@ export class UsersController {
 
   @Get()
   async listByRole(@Query("role") role: string) {
-    const allowed: UserRole[] = ["student", "reviewer", "admin"];
-    if (!role || !allowed.includes(role as UserRole)) {
-      throw new BadRequestException("Query role must be one of: student, reviewer, admin");
+    if (!role || !isUserRole(role)) {
+      throw new BadRequestException(`Query role must be one of: ${USER_ROLES.join(", ")}`);
     }
-    return this.usersService.listByRole(role as UserRole);
+    return this.usersService.listByRole(role);
   }
 }

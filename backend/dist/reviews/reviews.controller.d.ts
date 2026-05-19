@@ -12,10 +12,18 @@ export declare class ReviewsController {
     }, body: ReviewActionDto): Promise<{
         ok: boolean;
     }>;
-    adminQueue(req: {
+    libraryQueue(req: {
         user: JwtPayload;
     }): Promise<any[]>;
-    adminAct(req: {
+    libraryAct(req: {
+        user: JwtPayload;
+    }, body: ReviewActionDto): Promise<{
+        ok: boolean;
+    }>;
+    directorQueue(req: {
+        user: JwtPayload;
+    }): Promise<any[]>;
+    directorAct(req: {
         user: JwtPayload;
     }, body: ReviewActionDto): Promise<{
         ok: boolean;

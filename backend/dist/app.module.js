@@ -13,12 +13,14 @@ const users_module_1 = require("./users/users.module");
 const app_controller_1 = require("./app.controller");
 const submissions_module_1 = require("./submissions/submissions.module");
 const reviews_module_1 = require("./reviews/reviews.module");
+const admin_module_1 = require("./admin/admin.module");
+const archive_module_1 = require("./archive/archive.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
 exports.AppModule = AppModule = __decorate([
     (0, common_1.Module)({
-        imports: [auth_module_1.AuthModule, users_module_1.UsersModule, submissions_module_1.SubmissionsModule, reviews_module_1.ReviewsModule],
+        imports: [auth_module_1.AuthModule, users_module_1.UsersModule, submissions_module_1.SubmissionsModule, reviews_module_1.ReviewsModule, admin_module_1.AdminModule, archive_module_1.ArchiveModule],
         controllers: [app_controller_1.AppController]
     })
 ], AppModule);

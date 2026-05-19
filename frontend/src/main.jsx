@@ -1,7 +1,12 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { ConfigProvider } from "antd";
+import dayjs from "dayjs";
 import App from "./App";
+
+// Required for Ant Design DatePicker / RangePicker
+import "dayjs/locale/en";
+dayjs.locale("en");
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>

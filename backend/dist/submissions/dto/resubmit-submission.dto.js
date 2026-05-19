@@ -10,18 +10,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ResubmitSubmissionDto = void 0;
-const class_transformer_1 = require("class-transformer");
 const class_validator_1 = require("class-validator");
-function normalizeKeywords(value) {
-    if (typeof value !== "string") {
-        return undefined;
-    }
-    return value
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .join(",");
-}
 class ResubmitSubmissionDto {
 }
 exports.ResubmitSubmissionDto = ResubmitSubmissionDto;
@@ -35,10 +24,4 @@ __decorate([
     (0, class_validator_1.IsOptional)(),
     __metadata("design:type", String)
 ], ResubmitSubmissionDto.prototype, "abstract", void 0);
-__decorate([
-    (0, class_transformer_1.Transform)(({ value }) => normalizeKeywords(value)),
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsOptional)(),
-    __metadata("design:type", String)
-], ResubmitSubmissionDto.prototype, "keywords", void 0);
 //# sourceMappingURL=resubmit-submission.dto.js.map

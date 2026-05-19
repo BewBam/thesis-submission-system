@@ -24,17 +24,31 @@ export class ReviewsController {
     return this.reviewsService.act(req.user, body);
   }
 
-  @Get("admin-queue")
+  @Get("library-queue")
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("admin")
-  adminQueue(@Req() req: { user: JwtPayload }) {
-    return this.reviewsService.getAdminQueue(req.user);
+  @Roles("library_staff")
+  libraryQueue(@Req() req: { user: JwtPayload }) {
+    return this.reviewsService.getLibraryQueue(req.user);
   }
 
-  @Post("admin-action")
+  @Post("library-action")
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("admin")
-  adminAct(@Req() req: { user: JwtPayload }, @Body() body: ReviewActionDto) {
-    return this.reviewsService.adminAct(req.user, body);
+  @Roles("library_staff")
+  libraryAct(@Req() req: { user: JwtPayload }, @Body() body: ReviewActionDto) {
+    return this.reviewsService.libraryAct(req.user, body);
+  }
+
+  @Get("director-queue")
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("director")
+  directorQueue(@Req() req: { user: JwtPayload }) {
+    return this.reviewsService.getDirectorQueue(req.user);
+  }
+
+  @Post("director-action")
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("director")
+  directorAct(@Req() req: { user: JwtPayload }, @Body() body: ReviewActionDto) {
+    return this.reviewsService.directorAct(req.user, body);
   }
 }

@@ -21,7 +21,7 @@ __decorate([
 ], ReviewActionDto.prototype, "submissionId", void 0);
 __decorate([
     (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsIn)(["approve", "reject"]),
+    (0, class_validator_1.IsIn)(["approve", "reject", "archive"]),
     __metadata("design:type", String)
 ], ReviewActionDto.prototype, "action", void 0);
 __decorate([

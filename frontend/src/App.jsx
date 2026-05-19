@@ -12,12 +12,15 @@ import {
   Select,
   Space,
   Table,
+  Tabs,
   Tag,
   Typography,
   Upload,
   message
 } from "antd";
 import { InboxOutlined } from "@ant-design/icons";
+import AdminPanel from "./AdminPanel.jsx";
+import LibraryArchivePanel from "./LibraryArchivePanel.jsx";
 
 const STORAGE_KEY = "thesis_portal_auth";
 const BRAND_PRIMARY = "#1488D8";
@@ -27,19 +30,83 @@ const { Header, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
 
-const allowedAttachmentTypes = [
-  "application/pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/msword",
-  "application/zip",
-  "application/x-zip-compressed",
-  "image/png",
-  "image/jpeg"
-];
+const THESIS_MAX_FILE_SIZE_MB = 30;
+const THESIS_MAX_FILE_SIZE_BYTES = THESIS_MAX_FILE_SIZE_MB * 1024 * 1024;
+
+function studentEmailFromUser(user) {
+  if (!user?.username) {
+    return "";
+  }
+  const username = user.username.trim().toLowerCase();
+  return username.includes("@") ? username : `${username}@hcmut.edu.vn`;
+}
+
+const THESIS_YEAR_OPTIONS = Array.from({ length: 12 }, (_, index) => {
+  const year = new Date().getFullYear() + 1 - index;
+  return { value: String(year), label: String(year) };
+});
+
+function isSubmittedStatus(status) {
+  return status && status !== "draft";
+}
+
+function getReviewDecisions(record) {
+  return (Array.isArray(record?.reviews) ? record.reviews : []).map((review) => review.decision);
+}
+
+function getStudentSubmissionCapabilities(record) {
+  const status = record?.status === "reject" ? "rejected" : record?.status || "";
+  const hasReviewerDecision = getReviewDecisions(record).some((decision) => decision && decision !== "pending");
+
+  if (status === "draft") {
+    return { canEdit: true, canDelete: true, canRevertToDraft: false, canSubmit: true };
+  }
+  if (status === "archived") {
+    return { canEdit: false, canDelete: false, canRevertToDraft: false, canSubmit: false };
+  }
+  if (status === "rejected" || status === "approved") {
+    return { canEdit: true, canDelete: false, canRevertToDraft: false, canSubmit: true };
+  }
+  if (status === "reviewing") {
+    if (hasReviewerDecision) {
+      return { canEdit: false, canDelete: false, canRevertToDraft: false, canSubmit: false };
+    }
+    return { canEdit: true, canDelete: true, canRevertToDraft: true, canSubmit: false };
+  }
+  return { canEdit: false, canDelete: false, canRevertToDraft: false, canSubmit: false };
+}
+
+function canStudentSubmitThesis(activeSubmission, editingSubmissionId, editingRecord) {
+  if (!editingSubmissionId) {
+    return !activeSubmission;
+  }
+  if (activeSubmission && activeSubmission.id !== editingSubmissionId) {
+    return false;
+  }
+  return getStudentSubmissionCapabilities(editingRecord).canSubmit;
+}
+
+function validateThesisPdf(file) {
+  if (file.type !== "application/pdf") {
+    message.error("Thesis file must be PDF");
+    return false;
+  }
+  if (file.size > THESIS_MAX_FILE_SIZE_BYTES) {
+    message.error(`Thesis PDF must be at most ${THESIS_MAX_FILE_SIZE_MB} MB`);
+    return false;
+  }
+  return true;
+}
 
 function getRoleColor(role) {
   if (role === "admin") {
     return BRAND_SECONDARY;
+  }
+  if (role === "director") {
+    return "#6b4c9a";
+  }
+  if (role === "library_staff") {
+    return "#c45c26";
   }
   if (role === "reviewer") {
     return BRAND_PRIMARY;
@@ -48,13 +115,14 @@ function getRoleColor(role) {
 }
 
 function roleLabel(role) {
-  if (role === "admin") {
-    return "Administrator";
-  }
-  if (role === "reviewer") {
-    return "Reviewer";
-  }
-  return "Student";
+  const labels = {
+    admin: "Administrator",
+    director: "Library director",
+    library_staff: "Library staff",
+    reviewer: "Reviewer",
+    student: "Student"
+  };
+  return labels[role] || role;
 }
 
 function formatUuidList(value) {
@@ -75,16 +143,19 @@ function reviewDecisionColor(decision) {
 }
 
 function thesisStatusColor(status) {
+  if (status === "draft") {
+    return "default";
+  }
   if (status === "reviewing") {
     return "gold";
-  }
-  if (status === "approving") {
-    return "blue";
   }
   if (status === "approved") {
     return "green";
   }
-  if (status === "reject" || status === "rejected") {
+  if (status === "archived") {
+    return "purple";
+  }
+  if (status === "rejected" || status === "reject") {
     return "red";
   }
   return "default";
@@ -93,9 +164,16 @@ function thesisStatusColor(status) {
 function eventLabel(eventType) {
   const labels = {
     submitted: "Submitted",
+    draft_saved: "Draft saved",
+    draft_updated: "Draft updated",
     resubmitted: "Resubmitted",
     reviewer_approved: "Reviewer approved",
     reviewer_rejected: "Reviewer rejected",
+    library_staff_approved: "Library intake approved",
+    library_staff_rejected: "Library intake rejected",
+    director_archived: "Archived by director",
+    director_approved: "Director approved",
+    director_rejected: "Director rejected",
     admin_approved: "Admin approved",
     admin_rejected: "Admin rejected",
     status_changed: "Status changed"
@@ -104,13 +182,24 @@ function eventLabel(eventType) {
 }
 
 function eventColor(eventType) {
-  if (eventType === "submitted" || eventType === "resubmitted") {
+  if (eventType === "submitted" || eventType === "resubmitted" || eventType === "draft_saved" || eventType === "draft_updated") {
     return "cyan";
   }
-  if (eventType === "reviewer_approved" || eventType === "admin_approved") {
+  if (
+    eventType === "reviewer_approved" ||
+    eventType === "library_staff_approved" ||
+    eventType === "director_archived" ||
+    eventType === "director_approved" ||
+    eventType === "admin_approved"
+  ) {
     return "green";
   }
-  if (eventType === "reviewer_rejected" || eventType === "admin_rejected") {
+  if (
+    eventType === "reviewer_rejected" ||
+    eventType === "library_staff_rejected" ||
+    eventType === "director_rejected" ||
+    eventType === "admin_rejected"
+  ) {
     return "red";
   }
   if (eventType === "status_changed") {
@@ -134,9 +223,7 @@ function formatEventPayload(eventType, payload) {
     const updates = [];
     if (payload.titleUpdated) updates.push("title");
     if (payload.abstractUpdated) updates.push("abstract");
-    if (payload.keywordsUpdated) updates.push("keywords");
     if (payload.thesisFileReplaced) updates.push("thesis file");
-    if (payload.attachmentsReplaced) updates.push("attachments");
     return updates.length > 0 ? `Updated: ${updates.join(", ")}` : "Resubmitted without tracked field changes";
   }
 
@@ -175,37 +262,47 @@ function authHeaders(token) {
 function App() {
   const [loginForm] = Form.useForm();
   const [submissionForm] = Form.useForm();
-  const [resubmitForm] = Form.useForm();
   const [auth, setAuth] = useState(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isSubmittingSubmission, setIsSubmittingSubmission] = useState(false);
+  const [isDeletingSubmission, setIsDeletingSubmission] = useState(false);
+  const [isRevertingSubmission, setIsRevertingSubmission] = useState(false);
   const [isLoadingSubmissions, setIsLoadingSubmissions] = useState(false);
   const [studentSubmissions, setStudentSubmissions] = useState([]);
-  const [adminSubmissions, setAdminSubmissions] = useState([]);
-  const [adminQueue, setAdminQueue] = useState([]);
+  const [staffSubmissions, setStaffSubmissions] = useState([]);
+  const [libraryQueue, setLibraryQueue] = useState([]);
+  const [directorQueue, setDirectorQueue] = useState([]);
   const [reviewerOptions, setReviewerOptions] = useState([]);
   const [isLoadingReviewers, setIsLoadingReviewers] = useState(false);
   const [studentOptions, setStudentOptions] = useState([]);
   const [isLoadingStudents, setIsLoadingStudents] = useState(false);
+  const [archiveFaculties, setArchiveFaculties] = useState([]);
+  const [archiveSemesters, setArchiveSemesters] = useState([]);
+  const [archivePeriods, setArchivePeriods] = useState([]);
+  const [isLoadingArchiveFaculties, setIsLoadingArchiveFaculties] = useState(false);
+  const [isLoadingArchiveSemesters, setIsLoadingArchiveSemesters] = useState(false);
+  const [isLoadingArchivePeriods, setIsLoadingArchivePeriods] = useState(false);
   const [reviewerQueue, setReviewerQueue] = useState([]);
   const [reviewerSearch, setReviewerSearch] = useState("");
   const [isLoadingReviewerQueue, setIsLoadingReviewerQueue] = useState(false);
-  const [isLoadingAdminQueue, setIsLoadingAdminQueue] = useState(false);
+  const [isLoadingLibraryQueue, setIsLoadingLibraryQueue] = useState(false);
+  const [isLoadingDirectorQueue, setIsLoadingDirectorQueue] = useState(false);
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [rejectTargetId, setRejectTargetId] = useState(null);
   const [rejectReason, setRejectReason] = useState("");
   const [reviewActionLoadingId, setReviewActionLoadingId] = useState(null);
-  const [adminRejectModalOpen, setAdminRejectModalOpen] = useState(false);
-  const [adminRejectTargetId, setAdminRejectTargetId] = useState(null);
-  const [adminRejectReason, setAdminRejectReason] = useState("");
-  const [adminActionLoadingId, setAdminActionLoadingId] = useState(null);
-  const [adminDetailRecord, setAdminDetailRecord] = useState(null);
+  const [libraryRejectModalOpen, setLibraryRejectModalOpen] = useState(false);
+  const [libraryRejectTargetId, setLibraryRejectTargetId] = useState(null);
+  const [libraryRejectReason, setLibraryRejectReason] = useState("");
+  const [libraryActionLoadingId, setLibraryActionLoadingId] = useState(null);
+  const [directorActionLoadingId, setDirectorActionLoadingId] = useState(null);
+  const [staffDetailRecord, setStaffDetailRecord] = useState(null);
   const [studentDetailRecord, setStudentDetailRecord] = useState(null);
   const [reviewerDetailRecord, setReviewerDetailRecord] = useState(null);
   const [fileOpenLoadingKey, setFileOpenLoadingKey] = useState(null);
-  const [resubmitModalOpen, setResubmitModalOpen] = useState(false);
-  const [resubmitTarget, setResubmitTarget] = useState(null);
-  const [isResubmitting, setIsResubmitting] = useState(false);
+  const [editingSubmissionId, setEditingSubmissionId] = useState(null);
+  const [editingSubmissionStatus, setEditingSubmissionStatus] = useState(null);
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
@@ -237,10 +334,15 @@ function App() {
     return reviewerQueue.filter((item) => {
       const text = [
         item.title,
+        item.title_vi,
+        item.title_en,
+        item.student_email,
+        item.thesis_advisors,
+        item.major,
+        item.thesis_year,
         item.author,
         item.advisor,
         item.abstract,
-        item.keywords,
         item.submitter,
         item.submitter_username
       ]
@@ -267,11 +369,59 @@ function App() {
   );
 
 
+  const submissionPeriodId = Form.useWatch("submissionPeriodId", submissionForm);
+  const archiveFacultyId = Form.useWatch("archiveFacultyId", submissionForm);
+  const archiveSemesterId = Form.useWatch("archiveSemesterId", submissionForm);
+  const periodSelected = Boolean(submissionPeriodId);
+
+  const studentActiveSubmission = useMemo(
+    () =>
+      studentSubmissions.find(
+        (item) => isSubmittedStatus(item.status) && item.submitter_id === auth?.user?.id
+      ),
+    [studentSubmissions, auth?.user?.id]
+  );
+
+  const studentDraftSubmissions = useMemo(
+    () =>
+      studentSubmissions.filter(
+        (item) => item.status === "draft" && item.submitter_id === auth?.user?.id
+      ),
+    [studentSubmissions, auth?.user?.id]
+  );
+
+  const editingSubmissionRecord = useMemo(
+    () => studentSubmissions.find((item) => item.id === editingSubmissionId) ?? null,
+    [studentSubmissions, editingSubmissionId]
+  );
+
+  const editingSubmissionCapabilities = useMemo(
+    () =>
+      editingSubmissionRecord
+        ? getStudentSubmissionCapabilities(editingSubmissionRecord)
+        : { canEdit: true, canDelete: false, canRevertToDraft: false, canSubmit: !studentActiveSubmission },
+    [editingSubmissionRecord, studentActiveSubmission]
+  );
+
+  const canSubmitCurrentThesis = useMemo(
+    () => canStudentSubmitThesis(studentActiveSubmission, editingSubmissionId, editingSubmissionRecord),
+    [studentActiveSubmission, editingSubmissionId, editingSubmissionRecord]
+  );
+
   const submissionColumns = [
     {
-      title: "Title",
-      dataIndex: "title",
-      key: "title"
+      title: "Title (EN)",
+      dataIndex: "title_en",
+      key: "title_en",
+      ellipsis: true,
+      render: (_v, record) => record.title_en || record.title || "—"
+    },
+    {
+      title: "Faculty",
+      dataIndex: "faculty_name",
+      key: "faculty_name",
+      ellipsis: true,
+      render: (value, record) => value || record.faculty_name || "—"
     },
     {
       title: "Authors",
@@ -283,12 +433,6 @@ function App() {
       title: "Reviewers",
       dataIndex: "advisor",
       key: "advisor"
-    },
-    {
-      title: "Keywords",
-      dataIndex: "keywords",
-      key: "keywords",
-      render: (value) => (value ? value.split(",").join(", ") : "-")
     },
     {
       title: "Status",
@@ -335,15 +479,47 @@ function App() {
           <Button type="link" size="small" onClick={() => setStudentDetailRecord(record)}>
             Detail
           </Button>
-          {record.status === "reject" ? (
-            <Button type="primary" size="small" onClick={() => openResubmitModal(record)}>
-              Resubmit
+          {getStudentSubmissionCapabilities(record).canEdit ? (
+            <Button type="primary" size="small" onClick={() => loadSubmissionIntoForm(record)}>
+              Edit
+            </Button>
+          ) : null}
+          {getStudentSubmissionCapabilities(record).canDelete ? (
+            <Button danger size="small" onClick={() => void promptDeleteSubmission(record)}>
+              Delete
             </Button>
           ) : null}
         </Space>
       )
     }
   ];
+
+  const draftColumns = submissionColumns
+    .filter((col) => col.key !== "reviews" && col.key !== "actions")
+    .concat([
+      {
+        title: "Actions",
+        key: "draft_actions",
+        width: 160,
+        render: (_value, record) => (
+          <Space>
+            <Button type="link" size="small" onClick={() => setStudentDetailRecord(record)}>
+              Detail
+            </Button>
+            {getStudentSubmissionCapabilities(record).canEdit ? (
+              <Button type="primary" size="small" onClick={() => loadSubmissionIntoForm(record)}>
+                Edit
+              </Button>
+            ) : null}
+            {getStudentSubmissionCapabilities(record).canDelete ? (
+              <Button danger size="small" onClick={() => void promptDeleteSubmission(record)}>
+                Delete
+              </Button>
+            ) : null}
+          </Space>
+        )
+      }
+    ]);
 
   const adminSubmissionColumns = [
     {
@@ -385,14 +561,6 @@ function App() {
       width: 160
     },
     {
-      title: "Keywords",
-      dataIndex: "keywords",
-      key: "keywords",
-      ellipsis: true,
-      width: 140,
-      render: (value) => (value ? value.split(",").join(", ") : "—")
-    },
-    {
       title: "Abstract",
       dataIndex: "abstract",
       key: "abstract",
@@ -427,7 +595,7 @@ function App() {
       width: 110,
       fixed: "right",
       render: (_v, record) => (
-        <Button type="link" size="small" onClick={() => setAdminDetailRecord(record)}>
+        <Button type="link" size="small" onClick={() => setStaffDetailRecord(record)}>
           Full detail
         </Button>
       )
@@ -562,7 +730,7 @@ function App() {
     }
   ];
 
-  const adminQueueColumns = [
+  const buildStageQueueColumns = (loadingId, onApprove, onReject, approveLabel) => [
     {
       title: "Title",
       dataIndex: "title",
@@ -601,17 +769,13 @@ function App() {
     {
       title: "Actions",
       key: "actions",
-      width: 240,
+      width: 260,
       render: (_value, record) => (
         <Space>
-          <Button
-            type="primary"
-            loading={adminActionLoadingId === record.id}
-            onClick={() => submitAdminAction(record.id, "approve")}
-          >
-            Final approve
+          <Button type="primary" loading={loadingId === record.id} onClick={() => onApprove(record.id)}>
+            {approveLabel}
           </Button>
-          <Button danger loading={adminActionLoadingId === record.id} onClick={() => openAdminRejectModal(record.id)}>
+          <Button danger loading={loadingId === record.id} onClick={() => onReject(record.id)}>
             Reject
           </Button>
         </Space>
@@ -619,7 +783,7 @@ function App() {
     }
   ];
 
-  const loadAdminSubmissions = async () => {
+  const loadStaffSubmissions = async () => {
     setIsLoadingSubmissions(true);
     try {
       const response = await fetch("/api/submissions", {
@@ -631,7 +795,7 @@ function App() {
       if (!response.ok || !Array.isArray(payload)) {
         throw new Error("Unable to load all submissions");
       }
-      setAdminSubmissions(payload);
+      setStaffSubmissions(payload);
     } catch (error) {
       message.error(error.message || "Unable to load all submissions");
     } finally {
@@ -639,23 +803,43 @@ function App() {
     }
   };
 
-  const loadAdminQueue = async () => {
-    setIsLoadingAdminQueue(true);
+  const loadLibraryQueue = async () => {
+    setIsLoadingLibraryQueue(true);
     try {
-      const response = await fetch("/api/reviews/admin-queue", {
+      const response = await fetch("/api/reviews/library-queue", {
         headers: {
           ...authHeaders(auth?.token)
         }
       });
       const payload = await parseResponse(response);
       if (!response.ok || !Array.isArray(payload)) {
-        throw new Error("Unable to load admin queue");
+        throw new Error("Unable to load library intake queue");
       }
-      setAdminQueue(payload);
+      setLibraryQueue(payload);
     } catch (error) {
-      message.error(error.message || "Unable to load admin queue");
+      message.error(error.message || "Unable to load library intake queue");
     } finally {
-      setIsLoadingAdminQueue(false);
+      setIsLoadingLibraryQueue(false);
+    }
+  };
+
+  const loadDirectorQueue = async () => {
+    setIsLoadingDirectorQueue(true);
+    try {
+      const response = await fetch("/api/reviews/director-queue", {
+        headers: {
+          ...authHeaders(auth?.token)
+        }
+      });
+      const payload = await parseResponse(response);
+      if (!response.ok || !Array.isArray(payload)) {
+        throw new Error("Unable to load director archive queue");
+      }
+      setDirectorQueue(payload);
+    } catch (error) {
+      message.error(error.message || "Unable to load director archive queue");
+    } finally {
+      setIsLoadingDirectorQueue(false);
     }
   };
 
@@ -683,9 +867,15 @@ function App() {
     if (auth?.user?.role === "student" && auth?.user?.id) {
       void loadStudentSubmissions(auth.user.id);
     }
-    if (auth?.user?.role === "admin") {
-      void loadAdminSubmissions();
-      void loadAdminQueue();
+    const role = auth?.user?.role;
+    if (role === "library_staff" || role === "director") {
+      void loadStaffSubmissions();
+    }
+    if (role === "library_staff") {
+      void loadLibraryQueue();
+    }
+    if (role === "director") {
+      void loadDirectorQueue();
     }
   }, [auth]);
 
@@ -736,6 +926,101 @@ function App() {
     }
   };
 
+  const loadArchiveFaculties = async () => {
+    setIsLoadingArchiveFaculties(true);
+    try {
+      const response = await fetch("/api/archive/faculties", {
+        headers: { ...authHeaders(auth?.token) }
+      });
+      const payload = await parseResponse(response);
+      if (!response.ok || !Array.isArray(payload)) {
+        throw new Error("Unable to load faculties");
+      }
+      setArchiveFaculties(
+        payload.map((item) => ({
+          value: item.id,
+          label: `${item.name} (${item.code})`
+        }))
+      );
+    } catch (error) {
+      message.error(error.message || "Unable to load faculties");
+    } finally {
+      setIsLoadingArchiveFaculties(false);
+    }
+  };
+
+  const loadArchiveSemesters = async (facultyId) => {
+    if (!facultyId) {
+      setArchiveSemesters([]);
+      return;
+    }
+    setIsLoadingArchiveSemesters(true);
+    try {
+      const response = await fetch(`/api/archive/faculties/${facultyId}/semesters`, {
+        headers: { ...authHeaders(auth?.token) }
+      });
+      const payload = await parseResponse(response);
+      if (!response.ok || !Array.isArray(payload)) {
+        throw new Error("Unable to load semesters");
+      }
+      setArchiveSemesters(
+        payload.map((item) => ({
+          value: item.id,
+          label: `${item.name} (${item.code})`
+        }))
+      );
+    } catch (error) {
+      message.error(error.message || "Unable to load semesters");
+    } finally {
+      setIsLoadingArchiveSemesters(false);
+    }
+  };
+
+  const loadArchivePeriods = async (facultyId, semesterId) => {
+    if (!facultyId || !semesterId) {
+      setArchivePeriods([]);
+      return;
+    }
+    setIsLoadingArchivePeriods(true);
+    try {
+      const response = await fetch(
+        `/api/archive/submission-periods?facultyId=${encodeURIComponent(facultyId)}&semesterId=${encodeURIComponent(semesterId)}`,
+        { headers: { ...authHeaders(auth?.token) } }
+      );
+      const payload = await parseResponse(response);
+      if (!response.ok || !Array.isArray(payload)) {
+        throw new Error("Unable to load submission periods");
+      }
+      setArchivePeriods(payload);
+    } catch (error) {
+      message.error(error.message || "Unable to load submission periods");
+    } finally {
+      setIsLoadingArchivePeriods(false);
+    }
+  };
+
+  const handleArchiveFacultyChange = async (facultyId) => {
+    submissionForm.setFieldsValue({
+      archiveSemesterId: undefined,
+      submissionPeriodId: undefined
+    });
+    setArchivePeriods([]);
+    await loadArchiveSemesters(facultyId);
+  };
+
+  const handleArchiveSemesterChange = async (semesterId) => {
+    const facultyId = submissionForm.getFieldValue("archiveFacultyId");
+    submissionForm.setFieldsValue({
+      submissionPeriodId: undefined
+    });
+    setArchivePeriods([]);
+    await loadArchivePeriods(facultyId, semesterId);
+  };
+
+  const handleSubmissionPeriodChange = (periodId) => {
+    submissionForm.setFieldValue("submissionPeriodId", periodId);
+  };
+
   const loadStudents = async () => {
     setIsLoadingStudents(true);
     try {
@@ -764,6 +1049,7 @@ function App() {
     if (auth.user.role === "student") {
       void loadReviewers();
       void loadStudents();
+      void loadArchiveFaculties();
     }
   }, [auth]);
 
@@ -771,7 +1057,9 @@ function App() {
     if (auth?.user?.role === "student") {
       submissionForm.setFieldsValue({
         studentId: auth.user.id,
-        authorIds: [auth.user.id]
+        authorIds: [auth.user.id],
+        email: studentEmailFromUser(auth.user),
+        thesisYear: String(new Date().getFullYear())
       });
     }
     if (auth?.user?.role !== "student") {
@@ -833,112 +1121,261 @@ function App() {
     }
   };
 
-  const handleCreateSubmission = async (values) => {
-    setIsSubmittingSubmission(true);
-    try {
-      const thesisFile = values.thesisFile?.[0]?.originFileObj;
-      if (!thesisFile || thesisFile.type !== "application/pdf") {
-        throw new Error("Please upload a thesis PDF file");
-      }
-
-      const formData = new FormData();
-      formData.append("title", values.title.trim());
+  const buildSubmissionFormData = (values, { requireThesisFile = false } = {}) => {
+    const formData = new FormData();
+    const studentId = auth.user.id;
+    const authorIds = Array.isArray(values.authorIds) ? values.authorIds : [];
+    const reviewerIds = Array.isArray(values.reviewerIds) ? values.reviewerIds : [];
+    if (!authorIds.includes(auth.user.id)) {
+      throw new Error("Students must include themselves in the author list");
+    }
+    formData.append("studentId", studentId);
+    formData.append("email", (values.email || studentEmailFromUser(auth.user)).trim());
+    if (values.titleVi?.trim()) {
+      formData.append("titleVi", values.titleVi.trim());
+    }
+    if (values.titleEn?.trim()) {
+      formData.append("titleEn", values.titleEn.trim());
+    }
+    if (values.thesisAdvisors?.trim()) {
+      formData.append("thesisAdvisors", values.thesisAdvisors.trim());
+    }
+    if (values.major?.trim()) {
+      formData.append("major", values.major.trim());
+    }
+    if (values.thesisYear) {
+      formData.append("thesisYear", String(values.thesisYear).trim());
+    }
+    if (values.abstract?.trim()) {
       formData.append("abstract", values.abstract.trim());
-      formData.append("keywords", values.keywords.trim());
-      const studentId = auth.user.id;
-      const authorIds = Array.isArray(values.authorIds) ? values.authorIds : [];
-      const reviewerIds = Array.isArray(values.reviewerIds) ? values.reviewerIds : [];
-      if (auth.user.role === "student" && !authorIds.includes(auth.user.id)) {
-        throw new Error("Students must include themselves in the author list");
+    }
+    formData.append("authorIds", JSON.stringify(authorIds));
+    formData.append("reviewerIds", JSON.stringify(reviewerIds));
+    if (values.submissionPeriodId) {
+      formData.append("submissionPeriodId", values.submissionPeriodId);
+    }
+    const thesisFile = values.thesisFile?.[0]?.originFileObj;
+    if (thesisFile) {
+      if (!validateThesisPdf(thesisFile)) {
+        return null;
       }
-      formData.append("studentId", studentId);
-      formData.append("authorIds", JSON.stringify(authorIds));
-      formData.append("reviewerIds", JSON.stringify(reviewerIds));
       formData.append("thesisFile", thesisFile);
+    } else if (requireThesisFile) {
+      throw new Error("Please upload a thesis PDF file");
+    }
+    return formData;
+  };
 
-      for (const item of values.attachments || []) {
-        if (item?.originFileObj) {
-          formData.append("attachments", item.originFileObj);
-        }
+  const resetSubmissionForm = () => {
+    setEditingSubmissionId(null);
+    setEditingSubmissionStatus(null);
+    submissionForm.resetFields();
+    setArchiveSemesters([]);
+    setArchivePeriods([]);
+    submissionForm.setFieldsValue({
+      studentId: auth.user.id,
+      authorIds: [auth.user.id],
+      email: studentEmailFromUser(auth.user),
+      thesisYear: String(new Date().getFullYear())
+    });
+  };
+
+  const loadSubmissionIntoForm = (record) => {
+    setEditingSubmissionId(record.id);
+    setEditingSubmissionStatus(record.status);
+    const authorIds = Array.isArray(record.author_user_ids) ? record.author_user_ids : [];
+    const reviewerIds = Array.isArray(record.reviewer_user_ids) ? record.reviewer_user_ids : [];
+    submissionForm.setFieldsValue({
+      email: record.student_email || studentEmailFromUser(auth.user),
+      titleVi: record.title_vi || "",
+      titleEn: record.title_en || record.title || "",
+      thesisAdvisors: record.thesis_advisors || "",
+      major: record.major || "",
+      thesisYear: record.thesis_year || String(new Date().getFullYear()),
+      abstract: record.abstract || "",
+      authorIds: authorIds.length > 0 ? authorIds : [auth.user.id],
+      reviewerIds,
+      submissionPeriodId: record.submission_period_id,
+      thesisFile: []
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    const status = record.status === "reject" ? "rejected" : record.status;
+    message.info(
+      status === "rejected" || status === "approved"
+        ? "Edit your thesis and submit again for review"
+        : status === "reviewing"
+          ? "Update your thesis while reviewers have not decided yet"
+          : "Continue editing your draft"
+    );
+  };
+
+  const handleDeleteSubmission = async (submissionId) => {
+    setIsDeletingSubmission(true);
+    try {
+      const response = await fetch(`/api/submissions/${submissionId}`, {
+        method: "DELETE",
+        headers: { ...authHeaders(auth.token) }
+      });
+      const payload = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(payload?.message || "Failed to delete");
       }
+      message.success("Deleted");
+      if (editingSubmissionId === submissionId) {
+        resetSubmissionForm();
+      }
+      await loadStudentSubmissions(auth.user.id);
+    } catch (error) {
+      message.error(error.message || "Failed to delete");
+    } finally {
+      setIsDeletingSubmission(false);
+    }
+  };
 
-      const response = await fetch("/api/submissions", {
+  const promptDeleteSubmission = (record) => {
+    const title = record.title_en || record.title || "this thesis";
+    Modal.confirm({
+      title: "Delete thesis?",
+      content: `Delete "${title}"? This cannot be undone.`,
+      okText: "Delete",
+      okType: "danger",
+      cancelText: "Cancel",
+      onOk: () => handleDeleteSubmission(record.id)
+    });
+  };
+
+  const handleRevertToDraft = async () => {
+    if (!editingSubmissionId) {
+      return;
+    }
+    setIsRevertingSubmission(true);
+    try {
+      const response = await fetch(`/api/submissions/${editingSubmissionId}/revert-to-draft`, {
         method: "POST",
-        headers: {
-          ...authHeaders(auth.token)
-        },
+        headers: { ...authHeaders(auth.token) }
+      });
+      const payload = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(payload?.message || "Failed to revert to draft");
+      }
+      message.success("Reverted to draft");
+      setEditingSubmissionStatus("draft");
+      await loadStudentSubmissions(auth.user.id);
+    } catch (error) {
+      message.error(error.message || "Failed to revert to draft");
+    } finally {
+      setIsRevertingSubmission(false);
+    }
+  };
+
+  const handleSaveDraft = async (values) => {
+    setIsSavingDraft(true);
+    try {
+      const formData = buildSubmissionFormData(values, { requireThesisFile: false });
+      if (!formData) {
+        return;
+      }
+      const url = editingSubmissionId ? `/api/submissions/${editingSubmissionId}` : "/api/submissions/drafts";
+      const method = editingSubmissionId ? "PATCH" : "POST";
+      const response = await fetch(url, {
+        method,
+        headers: { ...authHeaders(auth.token) },
         body: formData
       });
+      const payload = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(payload?.message || "Failed to save draft");
+      }
+      if (!editingSubmissionId && payload?.id) {
+        setEditingSubmissionId(payload.id);
+        setEditingSubmissionStatus("draft");
+      }
+      message.success("Draft saved");
+      await loadStudentSubmissions(auth.user.id);
+    } catch (error) {
+      message.error(error.message || "Failed to save draft");
+    } finally {
+      setIsSavingDraft(false);
+    }
+  };
+
+  const handleSubmitThesis = async (values) => {
+    setIsSubmittingSubmission(true);
+    try {
+      if (!canStudentSubmitThesis(studentActiveSubmission, editingSubmissionId, editingSubmissionRecord)) {
+        throw new Error(
+          editingSubmissionRecord?.status === "reviewing"
+            ? "This thesis is already under review. Revert it to draft first if all reviewers are still pending."
+            : studentActiveSubmission
+              ? "You already have a submitted thesis. Edit that thesis to update and resubmit it."
+              : "Unable to submit thesis"
+        );
+      }
+      const formData = buildSubmissionFormData(values, {
+        requireThesisFile: !editingSubmissionId
+      });
+      if (!formData) {
+        return;
+      }
+      if (!values.titleVi?.trim()) {
+        throw new Error("Vietnamese thesis title is required");
+      }
+      if (!values.titleEn?.trim()) {
+        throw new Error("English thesis title is required");
+      }
+      if (!values.thesisAdvisors?.trim()) {
+        throw new Error("Advisor(s) is required");
+      }
+      if (!values.major?.trim()) {
+        throw new Error("Major is required");
+      }
+      if (!values.thesisYear) {
+        throw new Error("Year is required");
+      }
+      if (!values.abstract?.trim()) {
+        throw new Error("Abstract is required");
+      }
+      if (!values.submissionPeriodId) {
+        throw new Error("Please select a submission period");
+      }
+      const reviewerIds = Array.isArray(values.reviewerIds) ? values.reviewerIds : [];
+      if (reviewerIds.length === 0) {
+        throw new Error("Please select at least one reviewer");
+      }
+
+      let response;
+      if (editingSubmissionId) {
+        response = await fetch(`/api/submissions/${editingSubmissionId}/submit`, {
+          method: "POST",
+          headers: { ...authHeaders(auth.token) },
+          body: formData
+        });
+      } else {
+        if (!values.thesisFile?.[0]?.originFileObj) {
+          throw new Error("Please upload a thesis PDF file");
+        }
+        response = await fetch("/api/submissions", {
+          method: "POST",
+          headers: { ...authHeaders(auth.token) },
+          body: formData
+        });
+      }
       const payload = await parseResponse(response);
       if (!response.ok) {
         throw new Error(payload?.message || "Failed to submit thesis");
       }
 
-      message.success("Submission created successfully");
-      submissionForm.resetFields();
+      message.success(
+        editingSubmissionStatus === "rejected" || editingSubmissionStatus === "reject"
+          ? "Thesis updated and submitted for review"
+          : "Thesis submitted successfully"
+      );
+      resetSubmissionForm();
       await loadStudentSubmissions(auth.user.id);
     } catch (error) {
       message.error(error.message || "Failed to submit thesis");
     } finally {
       setIsSubmittingSubmission(false);
-    }
-  };
-
-  const openResubmitModal = (record) => {
-    setResubmitTarget(record);
-    resubmitForm.setFieldsValue({
-      title: record.title || "",
-      abstract: record.abstract || "",
-      keywords: record.keywords || ""
-    });
-    setResubmitModalOpen(true);
-  };
-
-  const handleResubmitSubmission = async (values) => {
-    if (!resubmitTarget?.id) {
-      return;
-    }
-    setIsResubmitting(true);
-    try {
-      const formData = new FormData();
-      formData.append("title", values.title?.trim() || "");
-      formData.append("abstract", values.abstract?.trim() || "");
-      formData.append("keywords", values.keywords?.trim() || "");
-
-      const thesisFile = values.thesisFile?.[0]?.originFileObj;
-      if (thesisFile) {
-        if (thesisFile.type !== "application/pdf") {
-          throw new Error("Thesis file must be PDF");
-        }
-        formData.append("thesisFile", thesisFile);
-      }
-
-      for (const item of values.attachments || []) {
-        if (item?.originFileObj) {
-          formData.append("attachments", item.originFileObj);
-        }
-      }
-
-      const response = await fetch(`/api/submissions/${resubmitTarget.id}/resubmit`, {
-        method: "PUT",
-        headers: {
-          ...authHeaders(auth?.token)
-        },
-        body: formData
-      });
-      const payload = await parseResponse(response);
-      if (!response.ok) {
-        throw new Error(payload?.message || "Failed to resubmit thesis");
-      }
-      message.success(`Resubmitted successfully. Status moved to ${payload?.status || "reviewing"}.`);
-      setResubmitModalOpen(false);
-      setResubmitTarget(null);
-      resubmitForm.resetFields();
-      await loadStudentSubmissions(auth.user.id);
-    } catch (error) {
-      message.error(error.message || "Failed to resubmit thesis");
-    } finally {
-      setIsResubmitting(false);
     }
   };
 
@@ -970,10 +1407,12 @@ function App() {
     }
   };
 
-  async function submitAdminAction(submissionId, action, comment) {
-    setAdminActionLoadingId(submissionId);
+  async function submitStageAction(endpoint, submissionId, action, comment, successApproveMsg) {
+    const setLoading =
+      endpoint === "library-action" ? setLibraryActionLoadingId : setDirectorActionLoadingId;
+    setLoading(submissionId);
     try {
-      const response = await fetch("/api/reviews/admin-action", {
+      const response = await fetch(`/api/reviews/${endpoint}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -987,16 +1426,47 @@ function App() {
       });
       const payload = await parseResponse(response);
       if (!response.ok) {
-        throw new Error(payload?.message || "Admin review action failed");
+        throw new Error(payload?.message || "Review action failed");
       }
-      message.success(action === "approve" ? "Final approve completed" : "Rejected");
-      await Promise.all([loadAdminQueue(), loadAdminSubmissions()]);
+      message.success(action === "approve" ? successApproveMsg : "Rejected");
+      await Promise.all([
+        loadStaffSubmissions(),
+        endpoint === "library-action" ? loadLibraryQueue() : loadDirectorQueue()
+      ]);
     } catch (error) {
-      message.error(error.message || "Admin review action failed");
+      message.error(error.message || "Review action failed");
     } finally {
-      setAdminActionLoadingId(null);
+      setLoading(null);
     }
   }
+
+  const submitLibraryAction = (submissionId, action, comment) =>
+    submitStageAction("library-action", submissionId, action, comment, "Passed library intake");
+
+  const submitDirectorArchive = async (submissionId) => {
+    setDirectorActionLoadingId(submissionId);
+    try {
+      const response = await fetch("/api/reviews/director-action", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(auth.token)
+        },
+        body: JSON.stringify({ submissionId, action: "archive" })
+      });
+      const payload = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(payload?.message || "Archive failed");
+      }
+      message.success("Submission archived");
+      await loadDirectorQueue();
+      await loadStaffSubmissions();
+    } catch (error) {
+      message.error(error.message || "Archive failed");
+    } finally {
+      setDirectorActionLoadingId(null);
+    }
+  };
 
   const openRejectModal = (submissionId) => {
     setRejectTargetId(submissionId);
@@ -1018,42 +1488,82 @@ function App() {
     setRejectReason("");
   };
 
-  function openAdminRejectModal(submissionId) {
-    setAdminRejectTargetId(submissionId);
-    setAdminRejectReason("");
-    setAdminRejectModalOpen(true);
+  function openLibraryRejectModal(submissionId) {
+    setLibraryRejectTargetId(submissionId);
+    setLibraryRejectReason("");
+    setLibraryRejectModalOpen(true);
   }
 
-  const confirmAdminReject = async () => {
-    if (!adminRejectTargetId) {
+  const confirmLibraryReject = async () => {
+    if (!libraryRejectTargetId) {
       return;
     }
-    if (!adminRejectReason.trim()) {
+    if (!libraryRejectReason.trim()) {
       message.error("Please enter a reject reason");
       return;
     }
-    setAdminRejectModalOpen(false);
-    await submitAdminAction(adminRejectTargetId, "reject", adminRejectReason.trim());
-    setAdminRejectTargetId(null);
-    setAdminRejectReason("");
+    setLibraryRejectModalOpen(false);
+    await submitLibraryAction(libraryRejectTargetId, "reject", libraryRejectReason.trim());
+    setLibraryRejectTargetId(null);
+    setLibraryRejectReason("");
   };
+
+  const buildDirectorArchiveColumns = (loadingId, onArchive) => [
+    {
+      title: "Title",
+      dataIndex: "title",
+      key: "title",
+      width: 220,
+      ellipsis: true
+    },
+    {
+      title: "Authors",
+      dataIndex: "author",
+      key: "author",
+      width: 220,
+      ellipsis: true
+    },
+    {
+      title: "Status",
+      dataIndex: "submission_status",
+      key: "submission_status",
+      width: 120,
+      render: (status) => <Tag color={thesisStatusColor(status)}>{status}</Tag>
+    },
+    {
+      title: "Submitted At",
+      dataIndex: "created_at",
+      key: "created_at",
+      width: 180,
+      render: (createdAt) => new Date(createdAt).toLocaleString()
+    },
+    {
+      title: "Actions",
+      key: "actions",
+      width: 140,
+      render: (_value, record) => (
+        <Button type="primary" loading={loadingId === record.id} onClick={() => onArchive(record.id)}>
+          Archive
+        </Button>
+      )
+    }
+  ];
 
   const handleLogout = () => {
     setAuth(null);
     setStudentSubmissions([]);
     setAdminSubmissions([]);
     setAdminQueue([]);
-    setAdminDetailRecord(null);
+    setStaffDetailRecord(null);
     setStudentDetailRecord(null);
     setReviewerDetailRecord(null);
     setReviewerQueue([]);
     setReviewerSearch("");
-    setResubmitModalOpen(false);
-    setResubmitTarget(null);
+    setEditingSubmissionId(null);
+    setEditingSubmissionStatus(null);
     localStorage.removeItem(STORAGE_KEY);
     loginForm.resetFields();
     submissionForm.resetFields();
-    resubmitForm.resetFields();
     message.info("You have been logged out");
   };
 
@@ -1152,7 +1662,7 @@ function App() {
                 type="info"
                 showIcon
                 message="Demo credentials"
-                description="student1-3/student123, reviewer1-3/review123, admin1/admin123 (seeded in Postgres)"
+                description="student1/student123, reviewer1/review123, library1/library123, director1/director123, admin1/admin123"
               />
               <Form form={loginForm} layout="vertical" onFinish={handleLogin} autoComplete="off">
                 <Form.Item
@@ -1195,14 +1705,156 @@ function App() {
               {auth.user.role === "student" ? (
                 <>
                   <Paragraph type="secondary">
-                    Submit thesis metadata and files. The first workflow status is always <Tag color="gold">reviewing</Tag>.
-                    Pick authors and reviewers using searchable multi-select lists. If a thesis is <Tag color="red">reject</Tag>,
-                    use <Text strong>Resubmit</Text> to edit metadata/files and send it for review again.
+                    You may save multiple drafts, but only one thesis can be in review at a time. While reviewers are
+                    still pending, you may edit, delete, or revert the thesis to draft. After a reviewer or library staff
+                    acts, edit and submit again from your submission record.
                   </Paragraph>
+                  {studentActiveSubmission && !canSubmitCurrentThesis && !editingSubmissionId ? (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      style={{ marginBottom: 12 }}
+                      message="You already have a submitted thesis"
+                      description="You can keep saving drafts. To send a thesis for review again, use Edit on your submission below."
+                    />
+                  ) : null}
+                  {editingSubmissionId ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      style={{ marginBottom: 12 }}
+                      message={
+                        editingSubmissionStatus === "rejected" || editingSubmissionStatus === "reject"
+                          ? "Editing rejected thesis"
+                          : editingSubmissionStatus === "approved"
+                            ? "Editing approved thesis"
+                            : editingSubmissionStatus === "reviewing"
+                              ? "Editing thesis under review"
+                              : "Editing draft"
+                      }
+                      description={
+                        editingSubmissionStatus === "rejected" ||
+                        editingSubmissionStatus === "reject" ||
+                        editingSubmissionStatus === "approved"
+                          ? "Update your thesis and submit again for review."
+                          : editingSubmissionStatus === "reviewing"
+                            ? "Save changes while no reviewer has approved or rejected yet. You may also revert to draft or delete."
+                            : "Save your draft or submit when ready."
+                      }
+                      action={
+                        <Button size="small" onClick={resetSubmissionForm}>
+                          Cancel edit
+                        </Button>
+                      }
+                    />
+                  ) : null}
                   <Divider style={{ margin: "8px 0" }} />
-                  <Form layout="vertical" form={submissionForm} onFinish={handleCreateSubmission} autoComplete="off">
-                    <Form.Item label="Title" name="title" rules={[{ required: true, message: "Title is required" }]}>
-                      <Input placeholder="Thesis title" />
+                  <Title level={5} style={{ margin: "0 0 8px" }}>
+                    Step 1 — Submission period
+                  </Title>
+                  <Form layout="vertical" form={submissionForm} autoComplete="off">
+                    <Form.Item
+                      label="Faculty"
+                      name="archiveFacultyId"
+                      rules={[{ required: true, message: "Please select a faculty" }]}
+                    >
+                      <Select
+                        showSearch
+                        allowClear
+                        placeholder="Select faculty"
+                        optionFilterProp="label"
+                        loading={isLoadingArchiveFaculties}
+                        options={archiveFaculties}
+                        disabled={Boolean(editingSubmissionId)}
+                        onChange={(value) => void handleArchiveFacultyChange(value)}
+                        notFoundContent={
+                          isLoadingArchiveFaculties ? "Loading..." : "No faculties with open submission periods"
+                        }
+                      />
+                    </Form.Item>
+                    <Form.Item
+                      label="Semester"
+                      name="archiveSemesterId"
+                      rules={[{ required: true, message: "Please select a semester" }]}
+                    >
+                      <Select
+                        showSearch
+                        allowClear
+                        placeholder="Select semester"
+                        optionFilterProp="label"
+                        loading={isLoadingArchiveSemesters}
+                        options={archiveSemesters}
+                        disabled={!archiveFacultyId || Boolean(editingSubmissionId)}
+                        onChange={(value) => void handleArchiveSemesterChange(value)}
+                        notFoundContent={isLoadingArchiveSemesters ? "Loading..." : "Select a faculty first"}
+                      />
+                    </Form.Item>
+                    <Form.Item
+                      label="Submission period"
+                      name="submissionPeriodId"
+                      rules={[{ required: true, message: "Please select a submission period" }]}
+                    >
+                      <Select
+                        showSearch
+                        allowClear
+                        placeholder="Select open submission period"
+                        optionFilterProp="label"
+                        loading={isLoadingArchivePeriods}
+                        disabled={!archiveSemesterId || Boolean(editingSubmissionId)}
+                        onChange={handleSubmissionPeriodChange}
+                        options={archivePeriods.map((p) => ({
+                          value: p.id,
+                          label: `${p.name} (closes ${new Date(p.closesAt).toLocaleDateString()})`
+                        }))}
+                        notFoundContent={
+                          isLoadingArchivePeriods ? "Loading..." : "No open periods for this semester"
+                        }
+                      />
+                    </Form.Item>
+
+                    <Divider style={{ margin: "8px 0" }} />
+                    <Title level={5} style={{ margin: "0 0 8px" }}>
+                      Step 2 — Thesis details
+                    </Title>
+                    {!periodSelected ? (
+                      <Alert
+                        type="info"
+                        showIcon
+                        message="Complete Step 1"
+                        description="Select faculty, semester, and submission period before entering thesis details."
+                        style={{ marginBottom: 16 }}
+                      />
+                    ) : null}
+                    <fieldset disabled={!periodSelected} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
+                    <Form.Item label="Email" name="email">
+                      <Input disabled placeholder="username@hcmut.edu.vn" />
+                    </Form.Item>
+                    <Form.Item
+                      label="Thesis title (Vietnamese)"
+                      name="titleVi"
+                      rules={[{ required: true, message: "Vietnamese title is required" }]}
+                    >
+                      <Input placeholder="Tên luận văn / luận án (tiếng Việt)" />
+                    </Form.Item>
+                    <Form.Item
+                      label="Thesis title (English)"
+                      name="titleEn"
+                      rules={[{ required: true, message: "English title is required" }]}
+                    >
+                      <Input placeholder="Thesis title in English" />
+                    </Form.Item>
+                    <Form.Item
+                      label="Advisor(s)"
+                      name="thesisAdvisors"
+                      rules={[{ required: true, message: "Advisor(s) is required" }]}
+                    >
+                      <Input placeholder="e.g. Assoc. Prof. Nguyen Van A; Dr. Tran Van B" />
+                    </Form.Item>
+                    <Form.Item label="Major" name="major" rules={[{ required: true, message: "Major is required" }]}>
+                      <Input placeholder="e.g. Computer Science" />
+                    </Form.Item>
+                    <Form.Item label="Year" name="thesisYear" rules={[{ required: true, message: "Year is required" }]}>
+                      <Select options={THESIS_YEAR_OPTIONS} placeholder="Graduation / submission year" />
                     </Form.Item>
                     <Form.Item
                       label="Authors"
@@ -1246,66 +1898,80 @@ function App() {
                       <TextArea rows={5} placeholder="Summary of your thesis" />
                     </Form.Item>
                     <Form.Item
-                      label="Keywords"
-                      name="keywords"
-                      rules={[{ required: true, message: "Keywords are required" }]}
-                    >
-                      <Input placeholder="keyword1, keyword2, keyword3" />
-                    </Form.Item>
-
-                    <Form.Item
                       label="Thesis PDF"
                       name="thesisFile"
                       valuePropName="fileList"
                       getValueFromEvent={(event) => event?.fileList || []}
-                      rules={[{ required: true, message: "Please upload thesis PDF" }]}
+                      rules={[
+                        {
+                          required: !editingSubmissionId,
+                          message: "Please upload thesis PDF"
+                        }
+                      ]}
+                      extra={
+                        editingSubmissionId
+                          ? "Leave empty to keep the current PDF on file"
+                          : undefined
+                      }
                     >
                       <Upload.Dragger
-                        beforeUpload={(file) => {
-                          const isPdf = file.type === "application/pdf";
-                          if (!isPdf) {
-                            message.error("Thesis file must be PDF");
-                          }
-                          return false;
-                        }}
+                        beforeUpload={(file) => (validateThesisPdf(file) ? false : Upload.LIST_IGNORE)}
                         maxCount={1}
                       >
                         <p className="ant-upload-drag-icon">
                           <InboxOutlined />
                         </p>
-                        <p className="ant-upload-text">Click or drag PDF thesis file here</p>
+                        <p className="ant-upload-text">Click or drag PDF thesis file here (max {THESIS_MAX_FILE_SIZE_MB} MB)</p>
                       </Upload.Dragger>
                     </Form.Item>
 
-                    <Form.Item
-                      label="Attachments (optional)"
-                      name="attachments"
-                      valuePropName="fileList"
-                      getValueFromEvent={(event) => event?.fileList || []}
-                    >
-                      <Upload
-                        multiple
-                        beforeUpload={(file) => {
-                          const isAllowed = allowedAttachmentTypes.includes(file.type);
-                          if (!isAllowed) {
-                            message.error("Unsupported attachment format");
-                          }
-                          return false;
-                        }}
+                    <Space wrap>
+                      <Button
+                        onClick={() => void handleSaveDraft(submissionForm.getFieldsValue())}
+                        loading={isSavingDraft}
+                        disabled={!periodSelected && !editingSubmissionId}
                       >
-                        <Button>Choose attachments</Button>
-                      </Upload>
-                    </Form.Item>
-
-                    <Button type="primary" htmlType="submit" loading={isSubmittingSubmission}>
-                      Submit Thesis
-                    </Button>
+                        Save draft
+                      </Button>
+                      <Button
+                        type="primary"
+                        onClick={() => submissionForm.validateFields().then(handleSubmitThesis).catch(() => {})}
+                        loading={isSubmittingSubmission}
+                        disabled={(!periodSelected && !editingSubmissionId) || !canSubmitCurrentThesis}
+                      >
+                        {editingSubmissionStatus === "rejected" ||
+                        editingSubmissionStatus === "reject" ||
+                        editingSubmissionStatus === "approved"
+                          ? "Submit again"
+                          : "Submit thesis"}
+                      </Button>
+                      {editingSubmissionId && editingSubmissionCapabilities.canRevertToDraft ? (
+                        <Button loading={isRevertingSubmission} onClick={() => void handleRevertToDraft()}>
+                          Revert to draft
+                        </Button>
+                      ) : null}
+                      {editingSubmissionId && editingSubmissionCapabilities.canDelete ? (
+                        <Button
+                          danger
+                          loading={isDeletingSubmission}
+                          onClick={() => editingSubmissionRecord && promptDeleteSubmission(editingSubmissionRecord)}
+                        >
+                          Delete
+                        </Button>
+                      ) : null}
+                      {editingSubmissionId ? (
+                        <Button onClick={resetSubmissionForm}>Cancel edit</Button>
+                      ) : (
+                        <Button onClick={resetSubmissionForm}>New draft</Button>
+                      )}
+                    </Space>
+                    </fieldset>
                   </Form>
 
                   <Divider style={{ margin: "8px 0" }} />
                   <Space style={{ width: "100%", justifyContent: "space-between" }}>
                     <Title level={5} style={{ margin: 0 }}>
-                      My Submissions
+                      My submission
                     </Title>
                     <Button onClick={() => loadStudentSubmissions(auth.user.id)} loading={isLoadingSubmissions}>
                       Refresh
@@ -1313,11 +1979,25 @@ function App() {
                   </Space>
                   <Table
                     rowKey="id"
-                    dataSource={studentSubmissions}
+                    dataSource={studentActiveSubmission ? [studentActiveSubmission] : []}
                     columns={submissionColumns}
                     loading={isLoadingSubmissions}
-                    pagination={{ pageSize: 5 }}
+                    pagination={false}
+                    locale={{ emptyText: "No submitted thesis yet" }}
                     scroll={{ x: 1200 }}
+                  />
+                  <Divider style={{ margin: "8px 0" }} />
+                  <Title level={5} style={{ margin: "0 0 8px" }}>
+                    Drafts ({studentDraftSubmissions.length})
+                  </Title>
+                  <Table
+                    rowKey="id"
+                    dataSource={studentDraftSubmissions}
+                    columns={draftColumns}
+                    loading={isLoadingSubmissions}
+                    pagination={{ pageSize: 5 }}
+                    locale={{ emptyText: "No drafts saved" }}
+                    scroll={{ x: 1000 }}
                   />
                 </>
               ) : auth.user.role === "reviewer" ? (
@@ -1336,7 +2016,7 @@ function App() {
                   </Space>
                   <Input
                     allowClear
-                    placeholder="Search by title, author, reviewer list, abstract, keywords, submitter..."
+                    placeholder="Search by title, author, reviewer list, abstract, submitter..."
                     value={reviewerSearch}
                     onChange={(event) => setReviewerSearch(event.target.value)}
                   />
@@ -1375,52 +2055,115 @@ function App() {
                   />
                 </>
               ) : auth.user.role === "admin" ? (
+                <AdminPanel auth={auth} />
+              ) : auth.user.role === "library_staff" || auth.user.role === "director" ? (
+                <Tabs
+                  defaultActiveKey="workflow"
+                  items={[
+                    {
+                      key: "workflow",
+                      label: auth.user.role === "director" ? "Approval workflow" : "Intake & submissions",
+                      children: (
                 <>
                   <Paragraph type="secondary">
-                    Final review queue uses status <Tag color="blue">approving</Tag>. After decision, thesis becomes
-                    <Tag color="green">approved</Tag> or <Tag color="red">reject</Tag>.
+                    Workflow: <Tag color="gold">reviewing</Tag> → <Tag color="green">approved</Tag> →{" "}
+                    <Tag color="purple">archived</Tag> or <Tag color="red">rejected</Tag>.
                   </Paragraph>
+                  {auth.user.role === "library_staff" && (
+                    <>
+                      <Divider style={{ margin: "8px 0" }} />
+                      <Space style={{ width: "100%", justifyContent: "space-between" }}>
+                        <Title level={5} style={{ margin: 0 }}>
+                          Library intake queue
+                        </Title>
+                        <Button onClick={() => loadLibraryQueue()} loading={isLoadingLibraryQueue}>
+                          Refresh
+                        </Button>
+                      </Space>
+                      <Table
+                        rowKey="id"
+                        dataSource={libraryQueue}
+                        columns={buildStageQueueColumns(
+                          libraryActionLoadingId,
+                          (id) => submitLibraryAction(id, "approve"),
+                          openLibraryRejectModal,
+                          "Approve"
+                        )}
+                        loading={isLoadingLibraryQueue}
+                        pagination={{ pageSize: 5 }}
+                        scroll={{ x: 1250 }}
+                      />
+                    </>
+                  )}
+                  {auth.user.role === "director" && (
+                    <>
+                      <Divider style={{ margin: "8px 0" }} />
+                      <Space style={{ width: "100%", justifyContent: "space-between" }}>
+                        <Title level={5} style={{ margin: 0 }}>
+                          Archive approved submissions
+                        </Title>
+                        <Button onClick={() => loadDirectorQueue()} loading={isLoadingDirectorQueue}>
+                          Refresh
+                        </Button>
+                      </Space>
+                      <Table
+                        rowKey="id"
+                        dataSource={directorQueue}
+                        columns={buildDirectorArchiveColumns(directorActionLoadingId, (id) =>
+                          submitDirectorArchive(id)
+                        )}
+                        loading={isLoadingDirectorQueue}
+                        pagination={{ pageSize: 5 }}
+                        scroll={{ x: 1250 }}
+                      />
+                    </>
+                  )}
                   <Divider style={{ margin: "8px 0" }} />
                   <Space style={{ width: "100%", justifyContent: "space-between" }}>
                     <Title level={5} style={{ margin: 0 }}>
-                      Final Admin Queue
-                    </Title>
-                    <Button onClick={() => loadAdminQueue()} loading={isLoadingAdminQueue}>
-                      Refresh queue
-                    </Button>
-                  </Space>
-                  <Table
-                    rowKey="id"
-                    dataSource={adminQueue}
-                    columns={adminQueueColumns}
-                    loading={isLoadingAdminQueue}
-                    pagination={{ pageSize: 5 }}
-                    scroll={{ x: 1250 }}
-                  />
-                  <Divider style={{ margin: "8px 0" }} />
-                  <Space style={{ width: "100%", justifyContent: "space-between" }}>
-                    <Title level={5} style={{ margin: 0 }}>
-                      All Submissions
+                      All submissions
                     </Title>
                     <Button
                       onClick={() => {
-                        void loadAdminSubmissions();
-                        void loadAdminQueue();
+                        void loadStaffSubmissions();
+                        if (auth.user.role === "library_staff") {
+                          void loadLibraryQueue();
+                        }
+                        if (auth.user.role === "director") {
+                          void loadDirectorQueue();
+                        }
                       }}
-                      loading={isLoadingSubmissions || isLoadingAdminQueue}
+                      loading={
+                        isLoadingSubmissions || isLoadingLibraryQueue || isLoadingDirectorQueue
+                      }
                     >
                       Refresh
                     </Button>
                   </Space>
                   <Table
                     rowKey="id"
-                    dataSource={adminSubmissions}
+                    dataSource={staffSubmissions}
                     columns={adminSubmissionColumns}
                     loading={isLoadingSubmissions}
                     pagination={{ pageSize: 8 }}
                     scroll={{ x: 1400 }}
                   />
                 </>
+                      )
+                    },
+                    {
+                      key: "archive",
+                      label: "Archive configuration",
+                      children: (
+                        <LibraryArchivePanel
+                          auth={auth}
+                          readOnly={auth.user.role === "director"}
+                          canManage={auth.user.role === "library_staff" || auth.user.role === "admin"}
+                        />
+                      )
+                    }
+                  ]}
+                />
               ) : (
                 <Paragraph type="secondary">Unknown role.</Paragraph>
               )}
@@ -1429,7 +2172,11 @@ function App() {
         )}
       </Content>
       <Modal
-        title={studentDetailRecord ? `Thesis detail: ${studentDetailRecord.title}` : "Thesis detail"}
+        title={
+          studentDetailRecord
+            ? `Thesis detail: ${studentDetailRecord.title_en || studentDetailRecord.title}`
+            : "Thesis detail"
+        }
         open={Boolean(studentDetailRecord)}
         onCancel={() => setStudentDetailRecord(null)}
         footer={[
@@ -1443,7 +2190,14 @@ function App() {
         {studentDetailRecord ? (
           <Space direction="vertical" size="middle" style={{ width: "100%" }}>
             <Descriptions bordered size="small" column={1}>
-              <Descriptions.Item label="Title">{studentDetailRecord.title || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Email">{studentDetailRecord.student_email || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Title (Vietnamese)">{studentDetailRecord.title_vi || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Title (English)">
+                {studentDetailRecord.title_en || studentDetailRecord.title || "—"}
+              </Descriptions.Item>
+              <Descriptions.Item label="Advisor(s)">{studentDetailRecord.thesis_advisors || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Major">{studentDetailRecord.major || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Year">{studentDetailRecord.thesis_year || "—"}</Descriptions.Item>
               <Descriptions.Item label="Submitter account">
                 {studentDetailRecord.submitter || "—"}
                 {studentDetailRecord.submitter_username ? (
@@ -1466,9 +2220,9 @@ function App() {
               </Descriptions.Item>
               <Descriptions.Item label="Authors (resolved)">{studentDetailRecord.author || "—"}</Descriptions.Item>
               <Descriptions.Item label="Reviewers (resolved)">{studentDetailRecord.advisor || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Keywords">
-                {studentDetailRecord.keywords ? studentDetailRecord.keywords.split(",").join(", ") : "—"}
-              </Descriptions.Item>
+              <Descriptions.Item label="University">{studentDetailRecord.university_name || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Faculty">{studentDetailRecord.faculty_name || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Semester">{studentDetailRecord.semester_name || "—"}</Descriptions.Item>
               <Descriptions.Item label="Abstract">{studentDetailRecord.abstract || "—"}</Descriptions.Item>
             </Descriptions>
             <div>
@@ -1520,7 +2274,14 @@ function App() {
         {reviewerDetailRecord ? (
           <Space direction="vertical" size="middle" style={{ width: "100%" }}>
             <Descriptions bordered size="small" column={1}>
-              <Descriptions.Item label="Title">{reviewerDetailRecord.title || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Email">{reviewerDetailRecord.student_email || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Title (Vietnamese)">{reviewerDetailRecord.title_vi || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Title (English)">
+                {reviewerDetailRecord.title_en || reviewerDetailRecord.title || "—"}
+              </Descriptions.Item>
+              <Descriptions.Item label="Advisor(s)">{reviewerDetailRecord.thesis_advisors || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Major">{reviewerDetailRecord.major || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Year">{reviewerDetailRecord.thesis_year || "—"}</Descriptions.Item>
               <Descriptions.Item label="Submitter account">
                 {reviewerDetailRecord.submitter || "—"}
                 {reviewerDetailRecord.submitter_username ? (
@@ -1552,9 +2313,6 @@ function App() {
               <Descriptions.Item label="My comment">{reviewerDetailRecord.my_comment || "—"}</Descriptions.Item>
               <Descriptions.Item label="Authors (resolved)">{reviewerDetailRecord.author || "—"}</Descriptions.Item>
               <Descriptions.Item label="Reviewers (resolved)">{reviewerDetailRecord.advisor || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Keywords">
-                {reviewerDetailRecord.keywords ? reviewerDetailRecord.keywords.split(",").join(", ") : "—"}
-              </Descriptions.Item>
               <Descriptions.Item label="Abstract">{reviewerDetailRecord.abstract || "—"}</Descriptions.Item>
             </Descriptions>
             <div>
@@ -1588,79 +2346,83 @@ function App() {
         ) : null}
       </Modal>
       <Modal
-        title={adminDetailRecord ? `Thesis: ${adminDetailRecord.title}` : "Thesis detail"}
-        open={Boolean(adminDetailRecord)}
-        onCancel={() => setAdminDetailRecord(null)}
+        title={staffDetailRecord ? `Thesis: ${staffDetailRecord.title}` : "Thesis detail"}
+        open={Boolean(staffDetailRecord)}
+        onCancel={() => setStaffDetailRecord(null)}
         footer={[
-          <Button key="close" type="primary" onClick={() => setAdminDetailRecord(null)}>
+          <Button key="close" type="primary" onClick={() => setStaffDetailRecord(null)}>
             Close
           </Button>
         ]}
         width={800}
         destroyOnClose
       >
-        {adminDetailRecord ? (
+        {staffDetailRecord ? (
           <Space direction="vertical" size="middle" style={{ width: "100%" }}>
             <Descriptions bordered size="small" column={1}>
               <Descriptions.Item label="Submission ID">
                 <Text code copyable>
-                  {adminDetailRecord.id}
+                  {staffDetailRecord.id}
                 </Text>
               </Descriptions.Item>
-              <Descriptions.Item label="Title">{adminDetailRecord.title}</Descriptions.Item>
+              <Descriptions.Item label="Email">{staffDetailRecord.student_email || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Title (Vietnamese)">{staffDetailRecord.title_vi || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Title (English)">
+                {staffDetailRecord.title_en || staffDetailRecord.title || "—"}
+              </Descriptions.Item>
+              <Descriptions.Item label="Advisor(s)">{staffDetailRecord.thesis_advisors || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Major">{staffDetailRecord.major || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Year">{staffDetailRecord.thesis_year || "—"}</Descriptions.Item>
               <Descriptions.Item label="Submitter account">
-                {adminDetailRecord.submitter || "—"}
-                {adminDetailRecord.submitter_username ? (
+                {staffDetailRecord.submitter || "—"}
+                {staffDetailRecord.submitter_username ? (
                   <Text type="secondary">
                     {" "}
-                    (@{adminDetailRecord.submitter_username})
+                    (@{staffDetailRecord.submitter_username})
                   </Text>
                 ) : null}
               </Descriptions.Item>
               <Descriptions.Item label="Submitter user ID">
                 <Text code copyable>
-                  {adminDetailRecord.submitter_id}
+                  {staffDetailRecord.submitter_id}
                 </Text>
               </Descriptions.Item>
               <Descriptions.Item label="Workflow status">
                 <Tag
-                  color={thesisStatusColor(adminDetailRecord.status)}
+                  color={thesisStatusColor(staffDetailRecord.status)}
                 >
-                  {adminDetailRecord.status}
+                  {staffDetailRecord.status}
                 </Tag>
               </Descriptions.Item>
               <Descriptions.Item label="DSpace item ID">
-                {adminDetailRecord.dspace_item_id ? (
+                {staffDetailRecord.dspace_item_id ? (
                   <Text code copyable>
-                    {adminDetailRecord.dspace_item_id}
+                    {staffDetailRecord.dspace_item_id}
                   </Text>
                 ) : (
                   "—"
                 )}
               </Descriptions.Item>
               <Descriptions.Item label="Created at">
-                {new Date(adminDetailRecord.created_at).toLocaleString()}
+                {new Date(staffDetailRecord.created_at).toLocaleString()}
               </Descriptions.Item>
-              <Descriptions.Item label="Authors (resolved)">{adminDetailRecord.author || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Author user IDs">{formatUuidList(adminDetailRecord.author_user_ids)}</Descriptions.Item>
+              <Descriptions.Item label="Authors (resolved)">{staffDetailRecord.author || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Author user IDs">{formatUuidList(staffDetailRecord.author_user_ids)}</Descriptions.Item>
               <Descriptions.Item label="Author snapshot (stored)">
-                {adminDetailRecord.author_snapshot || "—"}
+                {staffDetailRecord.author_snapshot || "—"}
               </Descriptions.Item>
-              <Descriptions.Item label="Reviewers (resolved)">{adminDetailRecord.advisor || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Reviewer user IDs">{formatUuidList(adminDetailRecord.reviewer_user_ids)}</Descriptions.Item>
+              <Descriptions.Item label="Reviewers (resolved)">{staffDetailRecord.advisor || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Reviewer user IDs">{formatUuidList(staffDetailRecord.reviewer_user_ids)}</Descriptions.Item>
               <Descriptions.Item label="Reviewer snapshot (stored)">
-                {adminDetailRecord.advisor_snapshot || "—"}
+                {staffDetailRecord.advisor_snapshot || "—"}
               </Descriptions.Item>
-              <Descriptions.Item label="Keywords">
-                {adminDetailRecord.keywords ? adminDetailRecord.keywords.split(",").join(", ") : "—"}
-              </Descriptions.Item>
-              <Descriptions.Item label="Abstract">{adminDetailRecord.abstract || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Abstract">{staffDetailRecord.abstract || "—"}</Descriptions.Item>
             </Descriptions>
             <div>
               <Title level={5}>Files</Title>
-              {Array.isArray(adminDetailRecord.files) && adminDetailRecord.files.length > 0 ? (
+              {Array.isArray(staffDetailRecord.files) && staffDetailRecord.files.length > 0 ? (
                 <ul style={{ margin: 0, paddingLeft: 20 }}>
-                  {adminDetailRecord.files.map((f) => (
+                  {staffDetailRecord.files.map((f) => (
                     <li key={f.id}>
                       <Space wrap align="start">
                         <Text strong style={{ wordBreak: "break-word", overflowWrap: "anywhere" }}>
@@ -1670,8 +2432,8 @@ function App() {
                         <Button
                           type="primary"
                           size="small"
-                          loading={fileOpenLoadingKey === `${adminDetailRecord.id}:${f.id}`}
-                          onClick={() => void openProtectedSubmissionFile(adminDetailRecord.id, f.id)}
+                          loading={fileOpenLoadingKey === `${staffDetailRecord.id}:${f.id}`}
+                          onClick={() => void openProtectedSubmissionFile(staffDetailRecord.id, f.id)}
                         >
                           Open
                         </Button>
@@ -1690,9 +2452,9 @@ function App() {
             </div>
             <div>
               <Title level={5}>Per-reviewer reviews</Title>
-              {Array.isArray(adminDetailRecord.reviews) && adminDetailRecord.reviews.length > 0 ? (
+              {Array.isArray(staffDetailRecord.reviews) && staffDetailRecord.reviews.length > 0 ? (
                 <Descriptions bordered size="small" column={1}>
-                  {adminDetailRecord.reviews.map((r, idx) => (
+                  {staffDetailRecord.reviews.map((r, idx) => (
                     <Descriptions.Item
                       key={`${r.reviewerId || r.reviewer_id || idx}-${idx}`}
                       label={
@@ -1729,89 +2491,10 @@ function App() {
             </div>
             <div>
               <Title level={5}>Workflow History</Title>
-              {renderWorkflowHistory(adminDetailRecord.workflow_history)}
+              {renderWorkflowHistory(staffDetailRecord.workflow_history)}
             </div>
           </Space>
         ) : null}
-      </Modal>
-      <Modal
-        title={resubmitTarget ? `Resubmit thesis: ${resubmitTarget.title}` : "Resubmit thesis"}
-        open={resubmitModalOpen}
-        onCancel={() => {
-          setResubmitModalOpen(false);
-          setResubmitTarget(null);
-          resubmitForm.resetFields();
-        }}
-        footer={null}
-        width={760}
-        destroyOnClose
-      >
-        <Form form={resubmitForm} layout="vertical" onFinish={handleResubmitSubmission} autoComplete="off">
-          <Form.Item label="Title" name="title" rules={[{ required: true, message: "Title is required" }]}>
-            <Input placeholder="Thesis title" />
-          </Form.Item>
-          <Form.Item label="Abstract" name="abstract" rules={[{ required: true, message: "Abstract is required" }]}>
-            <TextArea rows={5} placeholder="Summary of your thesis" />
-          </Form.Item>
-          <Form.Item label="Keywords" name="keywords" rules={[{ required: true, message: "Keywords are required" }]}>
-            <Input placeholder="keyword1, keyword2, keyword3" />
-          </Form.Item>
-          <Form.Item
-            label="Replace Thesis PDF (optional)"
-            name="thesisFile"
-            valuePropName="fileList"
-            getValueFromEvent={(event) => event?.fileList || []}
-          >
-            <Upload.Dragger
-              beforeUpload={(file) => {
-                const isPdf = file.type === "application/pdf";
-                if (!isPdf) {
-                  message.error("Thesis file must be PDF");
-                }
-                return false;
-              }}
-              maxCount={1}
-            >
-              <p className="ant-upload-drag-icon">
-                <InboxOutlined />
-              </p>
-              <p className="ant-upload-text">Upload a new thesis PDF only if you want to replace the current one</p>
-            </Upload.Dragger>
-          </Form.Item>
-          <Form.Item
-            label="Replace attachments (optional)"
-            name="attachments"
-            valuePropName="fileList"
-            getValueFromEvent={(event) => event?.fileList || []}
-          >
-            <Upload
-              multiple
-              beforeUpload={(file) => {
-                const isAllowed = allowedAttachmentTypes.includes(file.type);
-                if (!isAllowed) {
-                  message.error("Unsupported attachment format");
-                }
-                return false;
-              }}
-            >
-              <Button>Choose new attachments</Button>
-            </Upload>
-          </Form.Item>
-          <Space>
-            <Button
-              onClick={() => {
-                setResubmitModalOpen(false);
-                setResubmitTarget(null);
-                resubmitForm.resetFields();
-              }}
-            >
-              Cancel
-            </Button>
-            <Button type="primary" htmlType="submit" loading={isResubmitting}>
-              Resubmit for review
-            </Button>
-          </Space>
-        </Form>
       </Modal>
       <Modal
         title="Reject thesis"
@@ -1829,19 +2512,19 @@ function App() {
         <TextArea rows={4} value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} />
       </Modal>
       <Modal
-        title="Admin reject thesis"
-        open={adminRejectModalOpen}
-        onOk={confirmAdminReject}
+        title="Library intake reject"
+        open={libraryRejectModalOpen}
+        onOk={confirmLibraryReject}
         onCancel={() => {
-          setAdminRejectModalOpen(false);
-          setAdminRejectTargetId(null);
-          setAdminRejectReason("");
+          setLibraryRejectModalOpen(false);
+          setLibraryRejectTargetId(null);
+          setLibraryRejectReason("");
         }}
         okText="Reject"
         okButtonProps={{ danger: true }}
       >
         <Paragraph type="secondary">Please provide a clear reason for rejection.</Paragraph>
-        <TextArea rows={4} value={adminRejectReason} onChange={(event) => setAdminRejectReason(event.target.value)} />
+        <TextArea rows={4} value={libraryRejectReason} onChange={(event) => setLibraryRejectReason(event.target.value)} />
       </Modal>
     </Layout>
   );

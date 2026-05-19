@@ -1,10 +1,12 @@
-export type UserRole = "student" | "reviewer" | "admin";
+import type { UserRole } from "./user-role";
+export type { UserRole } from "./user-role";
 export interface UserRecord {
     id: string;
     username: string;
     displayName: string;
     password: string;
     role: UserRole;
+    status: "active" | "disabled";
 }
 export declare class UsersService {
     private readonly db;
@@ -14,6 +16,6 @@ export declare class UsersService {
         id: string;
         username: string;
         displayName: string;
-        role: UserRole;
+        role: "student" | "reviewer" | "library_staff" | "director" | "admin";
     }[]>;
 }

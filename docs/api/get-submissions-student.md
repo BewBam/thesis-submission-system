@@ -29,7 +29,13 @@ Mảng các bản ghi submission (từ SQL `GROUP BY`), mỗi phần tử gồm 
 | Trường (đại diện) | Kiểu   | Mô tả |
 | ----------------- | ------ | ----- |
 | `id`              | string | ID submission |
-| `title`           | string | Tiêu đề |
+| `title`           | string | Tiêu đề (legacy; thường trùng `title_en`) |
+| `student_email`   | string | Email sinh viên nộp |
+| `title_vi`        | string | Tiêu đề tiếng Việt |
+| `title_en`        | string | Tiêu đề tiếng Anh |
+| `thesis_advisors` | string | Người hướng dẫn |
+| `major`           | string | Ngành |
+| `thesis_year`     | string | Năm |
 | `author`          | string | Chuỗi tác giả (aggregate hoặc snapshot) |
 | `advisor`         | string | Chuỗi phản biện đã gán |
 | `keywords`        | string | Từ khóa |

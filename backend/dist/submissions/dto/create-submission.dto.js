@@ -12,22 +12,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.CreateSubmissionDto = void 0;
 const class_transformer_1 = require("class-transformer");
 const class_validator_1 = require("class-validator");
-function normalizeKeywords(value) {
-    if (Array.isArray(value)) {
-        return value
-            .map((item) => String(item).trim())
-            .filter(Boolean)
-            .join(",");
-    }
-    if (typeof value === "string") {
-        return value
-            .split(",")
-            .map((item) => item.trim())
-            .filter(Boolean)
-            .join(",");
-    }
-    return "";
-}
+const thesis_metadata_fields_dto_1 = require("./thesis-metadata-fields.dto");
 function parseAuthorIds(value) {
     if (Array.isArray(value)) {
         return value.map((item) => String(item).trim()).filter(Boolean);
@@ -55,14 +40,19 @@ function parseAuthorIds(value) {
 function parseReviewerIds(value) {
     return parseAuthorIds(value);
 }
-class CreateSubmissionDto {
+class CreateSubmissionDto extends thesis_metadata_fields_dto_1.ThesisMetadataFieldsDto {
 }
 exports.CreateSubmissionDto = CreateSubmissionDto;
 __decorate([
     (0, class_validator_1.IsString)(),
     (0, class_validator_1.IsNotEmpty)(),
     __metadata("design:type", String)
-], CreateSubmissionDto.prototype, "title", void 0);
+], CreateSubmissionDto.prototype, "titleVi", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateSubmissionDto.prototype, "titleEn", void 0);
 __decorate([
     (0, class_transformer_1.Transform)(({ value }) => parseAuthorIds(value)),
     (0, class_validator_1.IsArray)(),
@@ -81,16 +71,30 @@ __decorate([
     (0, class_validator_1.IsString)(),
     (0, class_validator_1.IsNotEmpty)(),
     __metadata("design:type", String)
-], CreateSubmissionDto.prototype, "abstract", void 0);
+], CreateSubmissionDto.prototype, "thesisAdvisors", void 0);
 __decorate([
-    (0, class_transformer_1.Transform)(({ value }) => normalizeKeywords(value)),
     (0, class_validator_1.IsString)(),
     (0, class_validator_1.IsNotEmpty)(),
     __metadata("design:type", String)
-], CreateSubmissionDto.prototype, "keywords", void 0);
+], CreateSubmissionDto.prototype, "major", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateSubmissionDto.prototype, "thesisYear", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateSubmissionDto.prototype, "abstract", void 0);
 __decorate([
     (0, class_validator_1.IsString)(),
     (0, class_validator_1.IsNotEmpty)(),
     __metadata("design:type", String)
 ], CreateSubmissionDto.prototype, "studentId", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateSubmissionDto.prototype, "submissionPeriodId", void 0);
 //# sourceMappingURL=create-submission.dto.js.map

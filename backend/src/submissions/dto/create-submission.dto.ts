@@ -1,22 +1,6 @@
 import { Transform } from "class-transformer";
 import { ArrayNotEmpty, IsArray, IsNotEmpty, IsString } from "class-validator";
-
-function normalizeKeywords(value: unknown): string {
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => String(item).trim())
-      .filter(Boolean)
-      .join(",");
-  }
-  if (typeof value === "string") {
-    return value
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .join(",");
-  }
-  return "";
-}
+import { ThesisMetadataFieldsDto } from "./thesis-metadata-fields.dto";
 
 function parseAuthorIds(value: unknown): string[] {
   if (Array.isArray(value)) {
@@ -47,10 +31,14 @@ function parseReviewerIds(value: unknown): string[] {
   return parseAuthorIds(value);
 }
 
-export class CreateSubmissionDto {
+export class CreateSubmissionDto extends ThesisMetadataFieldsDto {
   @IsString()
   @IsNotEmpty()
-  title!: string;
+  titleVi!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  titleEn!: string;
 
   @Transform(({ value }) => parseAuthorIds(value))
   @IsArray()
@@ -66,14 +54,25 @@ export class CreateSubmissionDto {
 
   @IsString()
   @IsNotEmpty()
-  abstract!: string;
+  thesisAdvisors!: string;
 
-  @Transform(({ value }) => normalizeKeywords(value))
   @IsString()
   @IsNotEmpty()
-  keywords!: string;
+  major!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  thesisYear!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  abstract!: string;
 
   @IsString()
   @IsNotEmpty()
   studentId!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  submissionPeriodId!: string;
 }

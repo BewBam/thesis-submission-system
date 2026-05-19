@@ -8,6 +8,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SubmissionsModule = void 0;
 const common_1 = require("@nestjs/common");
+const archive_module_1 = require("../archive/archive.module");
 const auth_module_1 = require("../auth/auth.module");
 const roles_guard_1 = require("../auth/roles.guard");
 const users_module_1 = require("../users/users.module");
@@ -18,7 +19,7 @@ let SubmissionsModule = class SubmissionsModule {
 exports.SubmissionsModule = SubmissionsModule;
 exports.SubmissionsModule = SubmissionsModule = __decorate([
     (0, common_1.Module)({
-        imports: [users_module_1.UsersModule, auth_module_1.AuthModule],
+        imports: [users_module_1.UsersModule, auth_module_1.AuthModule, archive_module_1.ArchiveModule],
         controllers: [submissions_controller_1.SubmissionsController],
         providers: [submissions_service_1.SubmissionsService, roles_guard_1.RolesGuard]
     })

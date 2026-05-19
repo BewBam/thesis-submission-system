@@ -14,15 +14,15 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.UsersController = void 0;
 const common_1 = require("@nestjs/common");
+const user_role_1 = require("./user-role");
 const users_service_1 = require("./users.service");
 let UsersController = class UsersController {
     constructor(usersService) {
         this.usersService = usersService;
     }
     async listByRole(role) {
-        const allowed = ["student", "reviewer", "admin"];
-        if (!role || !allowed.includes(role)) {
-            throw new common_1.BadRequestException("Query role must be one of: student, reviewer, admin");
+        if (!role || !(0, user_role_1.isUserRole)(role)) {
+            throw new common_1.BadRequestException(`Query role must be one of: ${user_role_1.USER_ROLES.join(", ")}`);
         }
         return this.usersService.listByRole(role);
     }

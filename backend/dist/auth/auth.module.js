@@ -12,6 +12,7 @@ const jwt_1 = require("@nestjs/jwt");
 const passport_1 = require("@nestjs/passport");
 const auth_service_1 = require("./auth.service");
 const auth_controller_1 = require("./auth.controller");
+const admin_module_1 = require("../admin/admin.module");
 const users_module_1 = require("../users/users.module");
 const jwt_strategy_1 = require("./jwt.strategy");
 let AuthModule = class AuthModule {
@@ -21,6 +22,7 @@ exports.AuthModule = AuthModule = __decorate([
     (0, common_1.Module)({
         imports: [
             users_module_1.UsersModule,
+            admin_module_1.AdminModule,
             passport_1.PassportModule.register({ defaultStrategy: "jwt" }),
             jwt_1.JwtModule.register({
                 secret: process.env.JWT_SECRET || "dev-secret-change-me",
