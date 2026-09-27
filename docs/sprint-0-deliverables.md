@@ -51,11 +51,25 @@ Nguyen tac:
 
 ## 4) Mo hinh du lieu da chot
 
+### Bang `users`
+
+- `id`
+- `username` (unique)
+- `password` (dev seed; production should hash)
+- `display_name`
+- `role` (`student`, `reviewer`, `admin`)
+- `created_at`
+
 ### Bang `submissions`
 
 - `id`
 - `title`
-- `student_id`
+- `student_id` (tai khoan role `student`, nguon cho `author`)
+- `advisor_id` (legacy, optional)
+- `author` (snapshot ho ten luc nop)
+- `advisor` (snapshot nhieu reviewer, noi bang `; `)
+- `abstract`
+- `keywords`
 - `status` (`pending`, `approved`, `rejected`)
 - `dspace_item_id`
 - `created_at`
@@ -66,6 +80,18 @@ Nguyen tac:
 - `submission_id`
 - `file_name`
 - `file_url`
+
+### Bang `submission_authors`
+
+- `submission_id`
+- `user_id` (tai khoan role `student`)
+- `sort_order`
+
+### Bang `submission_reviewers`
+
+- `submission_id`
+- `user_id` (tai khoan role `reviewer`)
+- `sort_order`
 
 ### Bang `reviews`
 
@@ -86,6 +112,11 @@ Gioi han:
 - `advisor` -> `dc.contributor.advisor`
 - `abstract` -> `dc.description.abstract`
 - `keywords` -> `dc.subject`
+
+Nguon du lieu cho metadata:
+
+- `author` lay tu ho so tai khoan role `student` (tai khoan nop bai).
+- `advisor` lay tu danh sach tai khoan role `reviewer` duoc chon (multi-select), luu bang `submission_reviewers` + snapshot.
 
 ## 6) Quy trinh review da chot
 
