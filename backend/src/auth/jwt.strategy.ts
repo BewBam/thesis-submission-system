@@ -7,6 +7,7 @@ export type JwtPayload = {
   username: string;
   displayName?: string;
   role: "student" | "reviewer" | "library_staff" | "director" | "admin";
+  email?: string | null;
 };
 
 @Injectable()

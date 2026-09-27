@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -18,12 +19,13 @@ import { diskStorage } from "multer";
 import { mkdirSync } from "node:fs";
 import * as path from "node:path";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
-import { Roles } from "../auth/roles.decorator";
-import { RolesGuard } from "../auth/roles.guard";
+import { PermissionsGuard } from "../auth/permissions.guard";
+import { RequirePermissions } from "../auth/permissions.decorator";
 import type { JwtPayload } from "../auth/jwt.strategy";
 import { CreateSubmissionDto } from "./dto/create-submission.dto";
 import { SaveDraftDto } from "./dto/save-draft.dto";
-import { THESIS_MAX_FILE_SIZE_BYTES } from "./submission-limits";
+import { THESIS_MAX_FILE_SIZE_BYTES, isThesisPdfUpload } from "./submission-limits";
+import { SubmissionFormFieldsService } from "./submission-form-fields.service";
 import { SubmissionsService } from "./submissions.service";
 
 const thesisUploadInterceptor = FileInterceptor("thesisFile", {
@@ -37,48 +39,67 @@ const thesisUploadInterceptor = FileInterceptor("thesisFile", {
   }),
   limits: {
     fileSize: THESIS_MAX_FILE_SIZE_BYTES
+  },
+  fileFilter: (_req, file, cb) => {
+    if (!isThesisPdfUpload(file)) {
+      cb(new BadRequestException("Thesis file must be a PDF") as unknown as Error, false);
+      return;
+    }
+    cb(null, true);
   }
 });
 
 type UploadedThesisFile = { originalname: string; mimetype: string; path: string; filename: string };
 
 @Controller("submissions")
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 export class SubmissionsController {
-  constructor(private readonly submissionsService: SubmissionsService) {}
+  constructor(
+    private readonly submissionsService: SubmissionsService,
+    private readonly formFieldsService: SubmissionFormFieldsService
+  ) {}
+
+  private assertActorMayUseStudentId(actor: JwtPayload, studentId: string) {
+    if (actor.role === "admin") {
+      return;
+    }
+    if (actor.sub !== studentId) {
+      throw new ForbiddenException("Students can only submit as themselves");
+    }
+  }
+
+  @Get("form-fields")
+  @RequirePermissions("submit_thesis", "library_intake", "director_approval", "view_all_submissions", "configure_system")
+  listFormFields() {
+    return this.formFieldsService.listEnabled();
+  }
 
   @Post()
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("student")
+  @RequirePermissions("submit_thesis", "configure_system")
   @UseInterceptors(thesisUploadInterceptor)
   async create(
     @Req() req: { user: JwtPayload },
     @Body() body: CreateSubmissionDto,
     @UploadedFile() thesisFile?: UploadedThesisFile
   ) {
-    if (req.user.sub !== body.studentId) {
-      throw new ForbiddenException("Students can only submit as themselves");
-    }
+    this.assertActorMayUseStudentId(req.user, body.studentId);
     return this.submissionsService.createSubmission(req.user, body, thesisFile);
   }
 
   @Post("drafts")
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("student")
+  @RequirePermissions("submit_thesis", "configure_system")
   @UseInterceptors(thesisUploadInterceptor)
   async saveDraft(
     @Req() req: { user: JwtPayload },
     @Body() body: SaveDraftDto,
     @UploadedFile() thesisFile?: UploadedThesisFile
   ) {
-    if (req.user.sub !== body.studentId) {
-      throw new ForbiddenException("Students can only save drafts for themselves");
-    }
+    this.assertActorMayUseStudentId(req.user, body.studentId);
     return this.submissionsService.saveDraft(req.user, body, thesisFile);
   }
 
   @Patch(":submissionId")
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("student")
+  @RequirePermissions("submit_thesis", "configure_system")
   @UseInterceptors(thesisUploadInterceptor)
   async updateDraft(
     @Req() req: { user: JwtPayload },
@@ -86,15 +107,12 @@ export class SubmissionsController {
     @Body() body: SaveDraftDto,
     @UploadedFile() thesisFile?: UploadedThesisFile
   ) {
-    if (req.user.sub !== body.studentId) {
-      throw new ForbiddenException("Students can only update their own drafts");
-    }
+    this.assertActorMayUseStudentId(req.user, body.studentId);
     return this.submissionsService.updateDraft(req.user, submissionId, body, thesisFile);
   }
 
   @Post(":submissionId/submit")
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("student")
+  @RequirePermissions("submit_thesis", "configure_system")
   @UseInterceptors(thesisUploadInterceptor)
   async submit(
     @Req() req: { user: JwtPayload },
@@ -102,36 +120,30 @@ export class SubmissionsController {
     @Body() body: SaveDraftDto,
     @UploadedFile() thesisFile?: UploadedThesisFile
   ) {
-    if (req.user.sub !== body.studentId) {
-      throw new ForbiddenException("Students can only submit their own thesis");
-    }
+    this.assertActorMayUseStudentId(req.user, body.studentId);
     return this.submissionsService.submitSubmission(req.user, submissionId, body, thesisFile);
   }
 
   @Post(":submissionId/revert-to-draft")
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("student")
+  @RequirePermissions("submit_thesis", "configure_system")
   async revertToDraft(@Req() req: { user: JwtPayload }, @Param("submissionId") submissionId: string) {
     return this.submissionsService.revertSubmissionToDraft(req.user, submissionId);
   }
 
   @Delete(":submissionId")
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("student")
+  @RequirePermissions("submit_thesis", "library_intake", "director_approval", "configure_system")
   async deleteSubmission(@Req() req: { user: JwtPayload }, @Param("submissionId") submissionId: string) {
     return this.submissionsService.deleteSubmission(req.user, submissionId);
   }
 
   @Get()
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("library_staff", "director")
+  @RequirePermissions("view_all_submissions", "configure_system")
   getAll() {
     return this.submissionsService.getAllSubmissions();
   }
 
   @Get("student/:studentId")
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("student", "library_staff", "director")
+  @RequirePermissions("submit_thesis", "view_all_submissions", "configure_system")
   getByStudent(@Req() req: { user: JwtPayload }, @Param("studentId") studentId: string) {
     if (req.user.role === "student" && req.user.sub !== studentId) {
       throw new ForbiddenException();
@@ -140,8 +152,14 @@ export class SubmissionsController {
   }
 
   @Get(":submissionId/files/:fileId/download")
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("student", "reviewer", "library_staff", "director")
+  @RequirePermissions(
+    "submit_thesis",
+    "review_academic",
+    "library_intake",
+    "director_approval",
+    "view_all_submissions",
+    "configure_system"
+  )
   async downloadFile(
     @Req() req: { user: JwtPayload },
     @Param("submissionId") submissionId: string,

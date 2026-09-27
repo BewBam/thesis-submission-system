@@ -199,12 +199,17 @@ flowchart LR
 - Đăng nhập: `POST /auth/login` — response `user.role` là một trong năm giá trị trên.
 - Liệt kê user theo vai trò: `GET /users?role=...` — `student`, `reviewer`, `library_staff`, `director`, `admin`.
 - Ràng buộc DB: `CHECK (role IN ('student', 'reviewer', 'library_staff', 'director', 'admin'))` — migration `db/init/013_library_staff_director_roles.sql`.
+- API guard theo **permission** trong `role_permissions` (`PermissionsGuard` + `@RequirePermissions`), không chỉ hard-code role trên controller.
+- Integrity (migration `026_integrity_reviews_permissions.sql`):
+  - `submissions.student_id` / `submission_events.actor_id` / `reviews.reviewer_id` là UUID FK → `users`
+  - `reviews.decision` (+ `sort_order`) là nguồn gán reviewer; đã bỏ `submission_reviewers` và cột `reviews.status`
+  - một đợt `open` / khoa; submitter phải thuộc `submission_authors` (non-draft)
 - Workflow endpoints:
   - Reviewer: `GET /reviews/my-queue`, `POST /reviews/action`
   - Library: `GET /reviews/library-queue`, `POST /reviews/library-action`
   - Director: `GET /reviews/director-queue`, `POST /reviews/director-action`
 - Admin: `GET/POST/PATCH /admin/users`, `GET/PUT /admin/roles/:role`, `GET/PATCH /admin/settings`
-- Sự kiện: `library_staff_approved`, `library_staff_rejected`, `director_approved`, `director_rejected`
+- Sự kiện: `library_staff_approved`, `library_staff_rejected`, `director_archived`
 - Bảng: `role_permissions`, `system_settings`; cột `users.status` (`active` / `disabled`)
 
 ---
@@ -219,15 +224,13 @@ flowchart LR
 | `director`      | ✓         | ✓              | ✓           |
 | `admin`         | ✓         | ✓              | ✓           |
 
-Tài khoản demo: [`db/init/003_seed_users.sql`](../db/init/003_seed_users.sql)
+Tài khoản bootstrap: [`db/init/003_seed_users.sql`](../db/init/003_seed_users.sql)
 
-| Username   | Password     | Role            |
-| ---------- | ------------ | --------------- |
-| `student1` | `student123` | `student`       |
-| `reviewer1`| `review123`  | `reviewer`      |
-| `library1` | `library123` | `library_staff` |
-| `director1`| `director123`| `director`      |
-| `admin1`   | `admin123`   | `admin`         |
+| Username | Password   | Role  |
+| -------- | ---------- | ----- |
+| `admin1` | `admin123` | `admin` |
+
+Các user khác tạo qua Admin → User management. Archive (khoa/học kỳ/đợt) lấy từ Sync DSpace hoặc UI — không seed sẵn.
 
 **Sau khi cập nhật DB:** chạy migration `013` trên Postgres hiện có, hoặc `docker compose down -v` rồi `up` để init lại từ đầu.
 

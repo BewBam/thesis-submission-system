@@ -8,6 +8,11 @@ export type ThesisMetadataInput = {
   thesisAdvisors?: string;
   major?: string;
   thesisYear?: string;
+  dateIssued?: string;
+  publisher?: string;
+  documentType?: string;
+  language?: string;
+  description?: string;
 };
 
 export type NormalizedThesisMetadata = {
@@ -18,6 +23,11 @@ export type NormalizedThesisMetadata = {
   thesisAdvisors: string;
   major: string;
   thesisYear: string;
+  dateIssued: string;
+  publisher: string;
+  documentType: string;
+  language: string;
+  description: string;
 };
 
 export function buildStudentEmail(username: string, emailOverride?: string): string {
@@ -40,6 +50,12 @@ export function normalizeThesisMetadata(
   const thesisAdvisors = (dto.thesisAdvisors ?? "").trim();
   const major = (dto.major ?? "").trim();
   const thesisYear = (dto.thesisYear ?? "").trim();
+  // Archive/DSpace fields — requiredness is enforced by submission_form_fields config.
+  const dateIssued = (dto.dateIssued ?? thesisYear ?? "").trim();
+  const publisher = (dto.publisher ?? "").trim();
+  const documentType = (dto.documentType ?? "").trim();
+  const language = (dto.language ?? "").trim();
+  const description = (dto.description ?? "").trim();
 
   if (options.required) {
     if (!titleVi) {
@@ -71,7 +87,12 @@ export function normalizeThesisMetadata(
     title,
     thesisAdvisors,
     major,
-    thesisYear
+    thesisYear,
+    dateIssued,
+    publisher,
+    documentType,
+    language,
+    description
   };
 }
 
@@ -88,7 +109,12 @@ export function mergeThesisMetadata(
       titleEn: dto.titleEn ?? dto.title ?? existing.titleEn ?? existing.title,
       thesisAdvisors: dto.thesisAdvisors ?? existing.thesisAdvisors,
       major: dto.major ?? existing.major,
-      thesisYear: dto.thesisYear ?? existing.thesisYear
+      thesisYear: dto.thesisYear ?? existing.thesisYear,
+      dateIssued: dto.dateIssued ?? existing.dateIssued,
+      publisher: dto.publisher ?? existing.publisher,
+      documentType: dto.documentType ?? existing.documentType,
+      language: dto.language ?? existing.language,
+      description: dto.description ?? existing.description
     },
     username,
     options
@@ -101,10 +127,17 @@ export const THESIS_METADATA_SELECT = `
   s.title_en,
   s.thesis_advisors,
   s.major,
-  s.thesis_year`;
+  s.thesis_year,
+  s.date_issued,
+  s.publisher,
+  s.document_type,
+  s.language,
+  s.description,
+  s.extra_metadata`;
 
 export const THESIS_METADATA_INSERT_COLUMNS = `
-  student_email, title_vi, title_en, thesis_advisors, major, thesis_year`;
+  student_email, title_vi, title_en, thesis_advisors, major, thesis_year,
+  date_issued, publisher, document_type, language, description, extra_metadata`;
 
 export const THESIS_METADATA_GROUP_BY = `
   s.student_email,
@@ -112,4 +145,10 @@ export const THESIS_METADATA_GROUP_BY = `
   s.title_en,
   s.thesis_advisors,
   s.major,
-  s.thesis_year`;
+  s.thesis_year,
+  s.date_issued,
+  s.publisher,
+  s.document_type,
+  s.language,
+  s.description,
+  s.extra_metadata`;

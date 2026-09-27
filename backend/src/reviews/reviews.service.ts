@@ -1,10 +1,10 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
-import { DspacePublishService } from "../archive/dspace-publish.service";
 import {
   THESIS_METADATA_GROUP_BY,
   THESIS_METADATA_SELECT
 } from "../submissions/submission-metadata";
+import { WorkflowMailService } from "../mail/workflow-mail.service";
 import { createPgPool } from "../users/db-pool";
 import type { JwtPayload } from "../auth/jwt.strategy";
 import { ReviewActionDto } from "./dto/review-action.dto";
@@ -13,7 +13,7 @@ import { ReviewActionDto } from "./dto/review-action.dto";
 export class ReviewsService {
   private readonly db = createPgPool();
 
-  constructor(private readonly dspacePublishService: DspacePublishService) {}
+  constructor(private readonly workflowMail: WorkflowMailService) {}
 
   private libraryIntakeReadyClause() {
     return `s.status = 'reviewing'
@@ -39,7 +39,13 @@ export class ReviewsService {
               s.abstract,
               s.keywords,
               s.author,
-              s.advisor,
+              s.reviewer,
+              sem.faculty_id,
+              COALESCE(NULLIF(s.faculty_name, ''), f.name) AS faculty_name,
+              COALESCE(NULLIF(s.semester_name, ''), sem.name) AS semester_name,
+              s.submission_period_id,
+              sp.name AS period_name,
+              sp.semester_id,
               ${THESIS_METADATA_SELECT},
               s.student_id AS submitter_id,
               COALESCE(su.display_name, su.username) AS submitter,
@@ -62,7 +68,10 @@ export class ReviewsService {
               ) AS files
        FROM reviews r
        JOIN submissions s ON s.id = r.submission_id
-       LEFT JOIN users su ON su.id::text = s.student_id::text
+       LEFT JOIN users su ON su.username = s.student_id
+       LEFT JOIN submission_periods sp ON sp.id = s.submission_period_id
+       LEFT JOIN semesters sem ON sem.id = sp.semester_id
+       LEFT JOIN faculties f ON f.id = sem.faculty_id
        LEFT JOIN submission_files sf ON sf.submission_id = s.id
        WHERE r.reviewer_id = $1
        GROUP BY s.id,
@@ -70,7 +79,15 @@ export class ReviewsService {
                 s.abstract,
                 s.keywords,
                 s.author,
-                s.advisor,
+                s.reviewer,
+                sem.faculty_id,
+                s.faculty_name,
+                f.name,
+                s.semester_name,
+                sem.name,
+                s.submission_period_id,
+                sp.name,
+                sp.semester_id,
                 ${THESIS_METADATA_GROUP_BY},
                 s.student_id,
                 su.display_name,
@@ -121,18 +138,19 @@ export class ReviewsService {
     }
 
     const reviewDecision = dto.action === "approve" ? "approved" : "reject";
+    let allReviewersApproved = false;
+    const rejectReason = dto.action === "reject" ? dto.comment?.trim() || "" : "";
 
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
       await client.query(
         `UPDATE reviews
-         SET status = $1,
-             decision = $1,
+         SET decision = $1,
              comment = $2,
              decided_at = NOW()
-         WHERE submission_id = $3 AND reviewer_id = $4`,
-        [reviewDecision, dto.action === "reject" ? dto.comment?.trim() || null : null, dto.submissionId, user.sub]
+         WHERE submission_id = $3::uuid AND reviewer_id = $4`,
+        [reviewDecision, dto.action === "reject" ? rejectReason || null : null, dto.submissionId, user.sub]
       );
       await client.query(
         `INSERT INTO submission_events (id, submission_id, actor_id, actor_role, event_type, payload)
@@ -143,7 +161,7 @@ export class ReviewsService {
           user.sub,
           dto.action === "approve" ? "reviewer_approved" : "reviewer_rejected",
           JSON.stringify({
-            comment: dto.action === "reject" ? dto.comment?.trim() || null : null
+            comment: dto.action === "reject" ? rejectReason || null : null
           })
         ]
       );
@@ -173,6 +191,7 @@ export class ReviewsService {
         );
         const pendingCount = pending.rows[0]?.cnt ?? 0;
         if (pendingCount === 0) {
+          allReviewersApproved = true;
           await client.query(
             `INSERT INTO submission_events (id, submission_id, actor_id, actor_role, event_type, payload)
              VALUES ($1, $2, $3, 'system', 'status_changed', $4::jsonb)`,
@@ -198,6 +217,31 @@ export class ReviewsService {
       client.release();
     }
 
+    const actorName = user.displayName || user.username;
+
+    if (dto.action === "reject") {
+      this.workflowMail.notifySafely("student_reviewer_rejected", () =>
+        this.workflowMail.notifyStudentOnReviewerDecision(
+          dto.submissionId,
+          "rejected",
+          actorName,
+          rejectReason
+        )
+      );
+    } else {
+      this.workflowMail.notifySafely("student_reviewer_approved", () =>
+        this.workflowMail.notifyStudentOnReviewerDecision(dto.submissionId, "approved", actorName)
+      );
+      if (allReviewersApproved) {
+        this.workflowMail.notifySafely("library_review", () =>
+          this.workflowMail.notifyLibraryOnAllReviewersApproved(dto.submissionId)
+        );
+        this.workflowMail.notifySafely("student_all_reviewers_approved", () =>
+          this.workflowMail.notifyStudentOnAllReviewersApproved(dto.submissionId)
+        );
+      }
+    }
+
     return { ok: true };
   }
 
@@ -208,7 +252,13 @@ export class ReviewsService {
               s.abstract,
               s.keywords,
               s.author,
-              s.advisor,
+              s.reviewer,
+              sem.faculty_id,
+              COALESCE(NULLIF(s.faculty_name, ''), f.name) AS faculty_name,
+              COALESCE(NULLIF(s.semester_name, ''), sem.name) AS semester_name,
+              s.submission_period_id,
+              sp.name AS period_name,
+              sp.semester_id,
               ${THESIS_METADATA_SELECT},
               s.student_id AS submitter_id,
               COALESCE(su.display_name, su.username) AS submitter,
@@ -227,7 +277,10 @@ export class ReviewsService {
                 '[]'::json
               ) AS files
        FROM submissions s
-       LEFT JOIN users su ON su.id::text = s.student_id::text
+       LEFT JOIN users su ON su.username = s.student_id
+       LEFT JOIN submission_periods sp ON sp.id = s.submission_period_id
+       LEFT JOIN semesters sem ON sem.id = sp.semester_id
+       LEFT JOIN faculties f ON f.id = sem.faculty_id
        LEFT JOIN submission_files sf ON sf.submission_id = s.id
        WHERE ${whereClause}
        GROUP BY s.id,
@@ -235,7 +288,15 @@ export class ReviewsService {
                 s.abstract,
                 s.keywords,
                 s.author,
-                s.advisor,
+                s.reviewer,
+                sem.faculty_id,
+                s.faculty_name,
+                f.name,
+                s.semester_name,
+                sem.name,
+                s.submission_period_id,
+                sp.name,
+                sp.semester_id,
                 ${THESIS_METADATA_GROUP_BY},
                 s.student_id,
                 su.display_name,
@@ -290,6 +351,7 @@ export class ReviewsService {
     }
 
     const nextStatus = dto.action === "approve" ? "approved" : "rejected";
+    const rejectReason = dto.action === "reject" ? dto.comment?.trim() || "" : "";
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
@@ -312,7 +374,7 @@ export class ReviewsService {
           user.sub,
           dto.action === "approve" ? "library_staff_approved" : "library_staff_rejected",
           JSON.stringify({
-            comment: dto.action === "reject" ? dto.comment?.trim() || null : null
+            comment: dto.action === "reject" ? rejectReason || null : null
           })
         ]
       );
@@ -331,19 +393,30 @@ export class ReviewsService {
         ]
       );
       await client.query("COMMIT");
-
-      if (dto.action === "approve") {
-        try {
-          await this.dspacePublishService.publishApprovedSubmission(dto.submissionId);
-        } catch {
-          // Publish failure must not roll back approval.
-        }
-      }
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
     } finally {
       client.release();
+    }
+
+    const actorName = user.displayName || user.username;
+    if (dto.action === "approve") {
+      this.workflowMail.notifySafely("director_review", () =>
+        this.workflowMail.notifyDirectorsOnLibraryApproved(dto.submissionId)
+      );
+      this.workflowMail.notifySafely("student_library_approved", () =>
+        this.workflowMail.notifyStudentOnLibraryDecision(dto.submissionId, "approved", actorName)
+      );
+    } else {
+      this.workflowMail.notifySafely("student_library_rejected", () =>
+        this.workflowMail.notifyStudentOnLibraryDecision(
+          dto.submissionId,
+          "rejected",
+          actorName,
+          rejectReason
+        )
+      );
     }
 
     return { ok: true };
@@ -353,8 +426,14 @@ export class ReviewsService {
     if (user.role !== "director") {
       throw new ForbiddenException();
     }
-    if (dto.action !== "archive") {
-      throw new BadRequestException("Director can only archive approved submissions");
+    if (dto.action !== "archive" && dto.action !== "reject") {
+      throw new BadRequestException("Director can archive (accept) or reject approved submissions");
+    }
+
+    const actorName = user.displayName || user.username;
+    const rejectReason = dto.action === "reject" ? dto.comment?.trim() || "" : "";
+    if (dto.action === "reject" && !rejectReason) {
+      throw new BadRequestException("Reject reason is required");
     }
 
     const client = await this.db.connect();
@@ -369,34 +448,70 @@ export class ReviewsService {
         throw new NotFoundException("Submission not found");
       }
       if (row.status !== "approved") {
-        throw new BadRequestException("Only approved submissions can be archived");
+        throw new BadRequestException("Only approved submissions can be archived or rejected by the director");
       }
 
-      await client.query(`UPDATE submissions SET status = 'archived' WHERE id = $1::uuid`, [dto.submissionId]);
-      await client.query(
-        `INSERT INTO submission_events (id, submission_id, actor_id, actor_role, event_type, payload)
-         VALUES ($1, $2, $3, 'director', 'director_archived', $4::jsonb)`,
-        [
-          randomUUID(),
-          dto.submissionId,
-          user.sub,
-          JSON.stringify({ comment: dto.comment?.trim() || null })
-        ]
-      );
-      await client.query(
-        `INSERT INTO submission_events (id, submission_id, actor_id, actor_role, event_type, payload)
-         VALUES ($1, $2, $3, 'system', 'status_changed', $4::jsonb)`,
-        [
-          randomUUID(),
-          dto.submissionId,
-          user.sub,
-          JSON.stringify({
-            from: row.status,
-            to: "archived",
-            reason: "director_archived"
-          })
-        ]
-      );
+      if (dto.action === "archive") {
+        await client.query(
+          `UPDATE submissions
+           SET status = 'archived',
+               dspace_publish_status = COALESCE(NULLIF(dspace_publish_status, ''), 'pending')
+           WHERE id = $1::uuid`,
+          [dto.submissionId]
+        );
+        await client.query(
+          `INSERT INTO submission_events (id, submission_id, actor_id, actor_role, event_type, payload)
+           VALUES ($1, $2, $3, 'director', 'director_archived', $4::jsonb)`,
+          [
+            randomUUID(),
+            dto.submissionId,
+            user.sub,
+            JSON.stringify({ comment: dto.comment?.trim() || null })
+          ]
+        );
+        await client.query(
+          `INSERT INTO submission_events (id, submission_id, actor_id, actor_role, event_type, payload)
+           VALUES ($1, $2, $3, 'system', 'status_changed', $4::jsonb)`,
+          [
+            randomUUID(),
+            dto.submissionId,
+            user.sub,
+            JSON.stringify({
+              from: row.status,
+              to: "archived",
+              reason: "director_archived"
+            })
+          ]
+        );
+      } else {
+        await client.query(`UPDATE submissions SET status = 'rejected' WHERE id = $1::uuid`, [
+          dto.submissionId
+        ]);
+        await client.query(
+          `INSERT INTO submission_events (id, submission_id, actor_id, actor_role, event_type, payload)
+           VALUES ($1, $2, $3, 'director', 'director_rejected', $4::jsonb)`,
+          [
+            randomUUID(),
+            dto.submissionId,
+            user.sub,
+            JSON.stringify({ comment: rejectReason })
+          ]
+        );
+        await client.query(
+          `INSERT INTO submission_events (id, submission_id, actor_id, actor_role, event_type, payload)
+           VALUES ($1, $2, $3, 'system', 'status_changed', $4::jsonb)`,
+          [
+            randomUUID(),
+            dto.submissionId,
+            user.sub,
+            JSON.stringify({
+              from: row.status,
+              to: "rejected",
+              reason: "director_rejected"
+            })
+          ]
+        );
+      }
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -405,6 +520,25 @@ export class ReviewsService {
       client.release();
     }
 
+    if (dto.action === "archive") {
+      this.workflowMail.notifySafely("student_director_approved", () =>
+        this.workflowMail.notifyStudentOnDirectorDecision(dto.submissionId, "approved", actorName)
+      );
+      return {
+        ok: true,
+        dspaceDeferred: true,
+        message: "Archived to period. Push to DSpace later from Archive configuration."
+      };
+    }
+
+    this.workflowMail.notifySafely("student_director_rejected", () =>
+      this.workflowMail.notifyStudentOnDirectorDecision(
+        dto.submissionId,
+        "rejected",
+        actorName,
+        rejectReason
+      )
+    );
     return { ok: true };
   }
 }

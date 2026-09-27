@@ -1,4 +1,4 @@
-import { IsIn, IsString, MinLength } from "class-validator";
+import { IsIn, IsOptional, IsString, IsUUID, MinLength } from "class-validator";
 import { USER_ROLES } from "../../users/user-role";
 
 export class CreateUserDto {
@@ -16,4 +16,8 @@ export class CreateUserDto {
 
   @IsIn([...USER_ROLES])
   role!: (typeof USER_ROLES)[number];
+
+  @IsOptional()
+  @IsUUID()
+  facultyId?: string;
 }

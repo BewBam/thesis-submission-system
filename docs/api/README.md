@@ -13,8 +13,14 @@ Tài liệu chi tiết cho từng endpoint backend.
 | ------ | -------- | -------- |
 | GET | `/` | [`get-root.md`](./get-root.md) |
 | GET | `/health` | [`get-health.md`](./get-health.md) |
+| GET | `/auth/login-options` | [`get-auth-login-options.md`](./get-auth-login-options.md) |
 | POST | `/auth/login` | [`post-auth-login.md`](./post-auth-login.md) |
-| GET | `/users` | [`get-users.md`](./get-users.md) |
+| GET | `/auth/me` | [`get-auth-me.md`](./get-auth-me.md) |
+| GET | `/auth/google` | [`get-auth-google.md`](./get-auth-google.md) |
+| GET | `/admin/users/import-template` | [`admin-users-import.md`](./admin-users-import.md) |
+| POST | `/admin/users/import/preview` | [`admin-users-import.md`](./admin-users-import.md) |
+| POST | `/admin/users/import` | [`admin-users-import.md`](./admin-users-import.md) |
+| DELETE | `/admin/users/:userId` | [`delete-admin-users.md`](./delete-admin-users.md) |
 | POST | `/submissions` | [`post-submissions.md`](./post-submissions.md) |
 | GET | `/submissions/student/:studentId` | [`get-submissions-student.md`](./get-submissions-student.md) |
 | GET | `/reviews/my-queue` | [`get-reviews-my-queue.md`](./get-reviews-my-queue.md) |

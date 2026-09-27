@@ -144,7 +144,7 @@ Ghi chu pham vi hien tai: tam chua goi API DSpace, uu tien frontend/backend truo
 ## Backlog mo rong (sau MVP)
 
 - [ ] Tich hop kiem tra dao van
-- [ ] He thong thong bao email
+- [x] He thong thong bao email
 - [ ] API cho LMS
 - [ ] Dashboard thong ke
 - [ ] Phan tich du lieu nghien cuu

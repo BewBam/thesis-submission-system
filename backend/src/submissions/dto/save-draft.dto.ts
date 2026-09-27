@@ -44,6 +44,26 @@ export class SaveDraftDto extends ThesisMetadataFieldsDto {
   @IsString()
   abstract?: string;
 
+  @IsOptional()
+  @IsString()
+  dateIssued?: string;
+
+  @IsOptional()
+  @IsString()
+  publisher?: string;
+
+  @IsOptional()
+  @IsString()
+  documentType?: string;
+
+  @IsOptional()
+  @IsString()
+  language?: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
   @IsString()
   studentId!: string;
 

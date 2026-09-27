@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: thesis_user
       POSTGRES_PASSWORD: thesis_pass
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d
@@ -28,10 +28,37 @@ services:
       POSTGRES_DB: thesis_portal
       POSTGRES_USER: thesis_user
       POSTGRES_PASSWORD: thesis_pass
+      EMAIL_ENABLED: ${EMAIL_ENABLED:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_CALLBACK_URL: ${GOOGLE_CALLBACK_URL:-http://localhost:3000/auth/google/callback}
+      GOOGLE_ALLOWED_DOMAIN: ${GOOGLE_ALLOWED_DOMAIN:-hcmut.edu.vn}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
     ports:
       - "3000:3000"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+      - ./backend/uploads:/app/uploads
     depends_on:
       - postgres
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: npm run start:dev
+
+  mailpit:
+    image: axllent/mailpit
+    container_name: thesis_mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+      - "1025:1025"
 
   frontend:
     build:
@@ -43,8 +70,12 @@ services:
       API_PROXY_TARGET: http://backend:3000
     ports:
       - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
     depends_on:
       - backend
+    command: npm run dev -- --host 0.0.0.0 --port 5173
 
 volumes:
   pg_data:

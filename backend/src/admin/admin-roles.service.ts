@@ -1,11 +1,14 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { createPgPool } from "../users/db-pool";
 import { PERMISSIONS, type Permission } from "../users/permissions";
+import { PermissionsService } from "../users/permissions.service";
 import { USER_ROLES, type UserRole, isUserRole } from "../users/user-role";
 
 @Injectable()
 export class AdminRolesService {
   private readonly db = createPgPool();
+
+  constructor(private readonly permissionsService: PermissionsService) {}
 
   async listRolesWithPermissions() {
     const result = await this.db.query<{ role: UserRole; permission: string; allowed: boolean }>(
@@ -57,6 +60,7 @@ export class AdminRolesService {
         );
       }
       await client.query("COMMIT");
+      this.permissionsService.invalidateCache(role);
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

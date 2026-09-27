@@ -1,6 +1,13 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { createPgPool } from "../users/db-pool";
 
+const SENSITIVE_SETTING_KEYS = new Set([
+  "dspace_api_password",
+  "dspace_api_token",
+  "smtp_password"
+]);
+const MASK = "********";
+
 @Injectable()
 export class AdminSettingsService {
   private readonly db = createPgPool();
@@ -11,9 +18,10 @@ export class AdminSettingsService {
     );
     return result.rows.map((row) => ({
       key: row.key,
-      value: row.value,
+      value: SENSITIVE_SETTING_KEYS.has(row.key) && row.value ? MASK : row.value,
       description: row.description,
-      updatedAt: row.updated_at
+      updatedAt: row.updated_at,
+      sensitive: SENSITIVE_SETTING_KEYS.has(row.key)
     }));
   }
 
@@ -27,9 +35,17 @@ export class AdminSettingsService {
     try {
       await client.query("BEGIN");
       for (const key of keys) {
+        let nextValue = String(settings[key] ?? "");
+        if (key === "login_method" && nextValue !== "username" && nextValue !== "google") {
+          throw new BadRequestException("login_method must be username or google");
+        }
+        if (SENSITIVE_SETTING_KEYS.has(key) && (nextValue === MASK || nextValue === "")) {
+          // Keep existing secret when UI sends mask or blank.
+          continue;
+        }
         const updated = await client.query(
           `UPDATE system_settings SET value = $2, updated_at = NOW() WHERE key = $1 RETURNING key`,
-          [key, String(settings[key])]
+          [key, nextValue]
         );
         if (updated.rowCount === 0) {
           throw new BadRequestException(`Unknown setting key: ${key}`);

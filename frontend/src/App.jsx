@@ -14,6 +14,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Timeline,
   Typography,
   Upload,
   message
@@ -46,6 +47,106 @@ const THESIS_YEAR_OPTIONS = Array.from({ length: 12 }, (_, index) => {
   return { value: String(year), label: String(year) };
 });
 
+const DEFAULT_PUBLISHER = "Ho Chi Minh City University of Technology";
+const LANGUAGE_OPTIONS = [
+  { value: "vie", label: "Vietnamese (vie)" },
+  { value: "eng", label: "English (eng)" }
+];
+const DOCUMENT_TYPE_OPTIONS = [
+  { value: "Thesis", label: "Thesis" },
+  { value: "Dissertation", label: "Dissertation" },
+  { value: "Graduation thesis", label: "Graduation thesis" }
+];
+
+const defaultArchiveMetadata = (year = String(new Date().getFullYear())) => ({
+  dateIssued: year,
+  publisher: DEFAULT_PUBLISHER,
+  documentType: "Thesis",
+  language: "vie",
+  description: ""
+});
+
+function submissionSemesterKey(item) {
+  return item?.semester_id || item?.semesterId || item?.semester_name || item?.semesterName || "";
+}
+
+function submissionPeriodId(item) {
+  return item?.submission_period_id || item?.submissionPeriodId || "";
+}
+
+function buildSemesterFilterOptions(items) {
+  const map = new Map();
+  for (const item of items || []) {
+    const value = submissionSemesterKey(item);
+    if (!value) {
+      continue;
+    }
+    if (!map.has(value)) {
+      map.set(value, { value, label: item.semester_name || item.semesterName || value });
+    }
+  }
+  return [...map.values()];
+}
+
+function buildPeriodFilterOptions(items, semesterFilter) {
+  const map = new Map();
+  for (const item of items || []) {
+    if (semesterFilter && submissionSemesterKey(item) !== semesterFilter) {
+      continue;
+    }
+    const value = submissionPeriodId(item);
+    if (!value) {
+      continue;
+    }
+    if (!map.has(value)) {
+      const faculty = item.faculty_name || item.facultyName;
+      map.set(value, {
+        value,
+        label: `${faculty ? `${faculty} / ` : ""}${item.period_name || item.periodName || value}`
+      });
+    }
+  }
+  return [...map.values()];
+}
+
+function filterBySearchAndArchive(items, search, semesterFilter, periodFilter) {
+  const q = (search || "").trim().toLowerCase();
+  return (items || []).filter((item) => {
+    if (semesterFilter && submissionSemesterKey(item) !== semesterFilter) {
+      return false;
+    }
+    if (periodFilter && submissionPeriodId(item) !== periodFilter) {
+      return false;
+    }
+    if (!q) {
+      return true;
+    }
+    const text = [
+      item.title,
+      item.title_vi,
+      item.title_en,
+      item.student_email,
+      item.thesis_advisors,
+      item.major,
+      item.thesis_year,
+      item.author,
+      item.reviewer,
+      item.abstract,
+      item.submitter,
+      item.submitter_username,
+      item.faculty_name,
+      item.semester_name,
+      item.period_name,
+      item.status,
+      item.submission_status
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return text.includes(q);
+  });
+}
+
 function isSubmittedStatus(status) {
   return status && status !== "draft";
 }
@@ -54,40 +155,111 @@ function getReviewDecisions(record) {
   return (Array.isArray(record?.reviews) ? record.reviews : []).map((review) => review.decision);
 }
 
-function getStudentSubmissionCapabilities(record) {
+function isSubmissionSubmitter(record, userId) {
+  if (!record || !userId) {
+    return false;
+  }
+  return String(record.submitter_id) === String(userId);
+}
+
+function isSubmissionCoAuthor(record, userId) {
+  if (!record || !userId) {
+    return false;
+  }
+  const authorIds = Array.isArray(record.author_user_ids) ? record.author_user_ids.map(String) : [];
+  return authorIds.includes(String(userId));
+}
+
+function studentBlocksNewDraftOrSubmit(submissions, userId, excludeSubmissionId) {
+  if (!userId) {
+    return null;
+  }
+  const blocking = (submissions || []).find((item) => {
+    if (!isSubmittedStatus(item.status)) {
+      return false;
+    }
+    if (excludeSubmissionId && item.id === excludeSubmissionId) {
+      return false;
+    }
+    return isSubmissionSubmitter(item, userId) || isSubmissionCoAuthor(item, userId);
+  });
+  if (!blocking) {
+    return null;
+  }
+  if (isSubmissionSubmitter(blocking, userId)) {
+    return "You already have a submitted thesis. Only the submitter can edit that thesis; you cannot create another draft or submit a second thesis.";
+  }
+  return "You are listed as a co-author on a submitted thesis. You cannot create a draft, submit another thesis, or edit that submission — only the submitter can.";
+}
+
+function getStudentSubmissionCapabilities(record, currentUserId, allSubmissions = []) {
   const status = record?.status === "reject" ? "rejected" : record?.status || "";
   const hasReviewerDecision = getReviewDecisions(record).some((decision) => decision && decision !== "pending");
+  const readOnlyCaps = {
+    canEdit: false,
+    canDelete: false,
+    canRevertToDraft: false,
+    canSubmit: false
+  };
+
+  // Only the submitting student may change the thesis; co-authors use Detail only.
+  if (currentUserId && !isSubmissionSubmitter(record, currentUserId)) {
+    return readOnlyCaps;
+  }
+
+  const submitBlocked = Boolean(studentBlocksNewDraftOrSubmit(allSubmissions, currentUserId, record?.id));
 
   if (status === "draft") {
-    return { canEdit: true, canDelete: true, canRevertToDraft: false, canSubmit: true };
+    return {
+      canEdit: !submitBlocked,
+      canDelete: !submitBlocked,
+      canRevertToDraft: false,
+      canSubmit: !submitBlocked
+    };
   }
   if (status === "archived") {
-    return { canEdit: false, canDelete: false, canRevertToDraft: false, canSubmit: false };
+    return readOnlyCaps;
   }
   if (status === "rejected" || status === "approved") {
-    return { canEdit: true, canDelete: false, canRevertToDraft: false, canSubmit: true };
+    return {
+      canEdit: true,
+      canDelete: false,
+      canRevertToDraft: false,
+      canSubmit: !submitBlocked
+    };
   }
   if (status === "reviewing") {
     if (hasReviewerDecision) {
-      return { canEdit: false, canDelete: false, canRevertToDraft: false, canSubmit: false };
+      return readOnlyCaps;
     }
     return { canEdit: true, canDelete: true, canRevertToDraft: true, canSubmit: false };
   }
-  return { canEdit: false, canDelete: false, canRevertToDraft: false, canSubmit: false };
+  return readOnlyCaps;
 }
 
-function canStudentSubmitThesis(activeSubmission, editingSubmissionId, editingRecord) {
-  if (!editingSubmissionId) {
-    return !activeSubmission;
+function canStudentSubmitThesis(allSubmissions, userId, editingSubmissionId, editingRecord) {
+  if (editingSubmissionId && editingRecord) {
+    return getStudentSubmissionCapabilities(editingRecord, userId, allSubmissions).canSubmit;
   }
-  if (activeSubmission && activeSubmission.id !== editingSubmissionId) {
-    return false;
+  return !studentBlocksNewDraftOrSubmit(allSubmissions, userId, undefined);
+}
+
+function canStudentSaveDraft(allSubmissions, userId, editingRecord) {
+  if (editingRecord && isSubmissionSubmitter(editingRecord, userId) && editingRecord.status !== "draft") {
+    // Editing a submitted thesis uses PATCH, not draft-create rules.
+    return getStudentSubmissionCapabilities(editingRecord, userId, allSubmissions).canEdit;
   }
-  return getStudentSubmissionCapabilities(editingRecord).canSubmit;
+  if (editingRecord?.status === "draft" && isSubmissionSubmitter(editingRecord, userId)) {
+    return !studentBlocksNewDraftOrSubmit(allSubmissions, userId, editingRecord.id);
+  }
+  return !studentBlocksNewDraftOrSubmit(allSubmissions, userId, undefined);
 }
 
 function validateThesisPdf(file) {
-  if (file.type !== "application/pdf") {
+  const name = String(file?.name || "").toLowerCase();
+  const type = String(file?.type || "").toLowerCase();
+  const mimeOk = !type || type === "application/pdf" || type === "application/x-pdf";
+  if (!name.endsWith(".pdf") || !mimeOk) {
     message.error("Thesis file must be PDF");
     return false;
   }
@@ -96,6 +268,24 @@ function validateThesisPdf(file) {
     return false;
   }
   return true;
+}
+
+/** Map saved submission files to Ant Design Upload fileList (display only; no originFileObj). */
+function thesisFileListFromRecord(record) {
+  const files = Array.isArray(record?.files) ? record.files : [];
+  const thesis = files.find((f) => f.fileType === "thesis" || f.file_type === "thesis") || files[0];
+  if (!thesis) {
+    return [];
+  }
+  return [
+    {
+      uid: String(thesis.id || "existing-thesis"),
+      name: thesis.fileName || thesis.file_name || "thesis.pdf",
+      status: "done",
+      // Marker so save/submit keep the server file unless the user replaces it
+      existingFileId: thesis.id
+    }
+  ];
 }
 
 function getRoleColor(role) {
@@ -123,6 +313,10 @@ function roleLabel(role) {
     student: "Student"
   };
   return labels[role] || role;
+}
+
+function canStaffDeleteSubmission(role) {
+  return role === "admin" || role === "library_staff" || role === "director";
 }
 
 function formatUuidList(value) {
@@ -208,15 +402,74 @@ function eventColor(eventType) {
   return "default";
 }
 
+const WORKFLOW_STATUS_LABELS = {
+  draft: "Draft",
+  submitted: "Submitted",
+  reviewing: "Reviewing",
+  approved: "Approved",
+  rejected: "Rejected",
+  archived: "Archived"
+};
+
+const WORKFLOW_REASON_LABELS = {
+  all_reviewers_approved: "All reviewers approved",
+  reviewer_rejected: "A reviewer rejected the thesis",
+  library_staff_approved: "Passed library intake",
+  library_staff_rejected: "Library intake rejected",
+  director_archived: "Director archived the thesis",
+  director_rejected: "Director rejected the thesis",
+  student_reverted_to_draft: "Moved back to draft"
+};
+
+const WORKFLOW_ROLE_LABELS = {
+  student: "Student",
+  reviewer: "Reviewer",
+  library_staff: "Library staff",
+  director: "Director",
+  admin: "Admin",
+  system: "System"
+};
+
+function humanWorkflowStatus(status) {
+  if (!status) {
+    return "Unknown";
+  }
+  return WORKFLOW_STATUS_LABELS[status] || String(status).replaceAll("_", " ");
+}
+
+function humanWorkflowRole(role) {
+  if (!role) {
+    return "Unknown";
+  }
+  return WORKFLOW_ROLE_LABELS[role] || String(role).replaceAll("_", " ");
+}
+
+function eventComment(payload) {
+  const comment = typeof payload?.comment === "string" ? payload.comment.trim() : "";
+  return comment || null;
+}
+
 function formatEventPayload(eventType, payload) {
   if (!payload || typeof payload !== "object") {
     return null;
   }
 
-  if (eventType === "submitted") {
-    const authorCount = Array.isArray(payload.authorIds) ? payload.authorIds.length : 0;
-    const reviewerCount = Array.isArray(payload.reviewerIds) ? payload.reviewerIds.length : 0;
-    return `Title: "${payload.title || "—"}" • Authors: ${authorCount} • Reviewers: ${reviewerCount}`;
+  if (eventType === "submitted" || eventType === "draft_saved" || eventType === "draft_updated") {
+    const parts = [];
+    if (payload.title) {
+      parts.push(`Title: ${payload.title}`);
+    }
+    if (eventType === "submitted") {
+      const authorCount = Array.isArray(payload.authorIds) ? payload.authorIds.length : null;
+      const reviewerCount = Array.isArray(payload.reviewerIds) ? payload.reviewerIds.length : null;
+      if (authorCount != null) {
+        parts.push(`${authorCount} author${authorCount === 1 ? "" : "s"}`);
+      }
+      if (reviewerCount != null) {
+        parts.push(`${reviewerCount} reviewer${reviewerCount === 1 ? "" : "s"}`);
+      }
+    }
+    return parts.length > 0 ? parts.join(" · ") : null;
   }
 
   if (eventType === "resubmitted") {
@@ -227,15 +480,43 @@ function formatEventPayload(eventType, payload) {
     return updates.length > 0 ? `Updated: ${updates.join(", ")}` : "Resubmitted without tracked field changes";
   }
 
+  if (eventType === "reverted_to_draft") {
+    return payload.fromStatus ? `From ${humanWorkflowStatus(payload.fromStatus)}` : "Moved back to draft";
+  }
+
   if (eventType === "status_changed") {
-    return `Status: ${payload.from || "unknown"} -> ${payload.to || "unknown"}${payload.reason ? ` (${payload.reason})` : ""}`;
+    const from = payload.from ? humanWorkflowStatus(payload.from) : "";
+    const to = payload.to ? humanWorkflowStatus(payload.to) : "";
+    const reason = payload.reason
+      ? WORKFLOW_REASON_LABELS[payload.reason] || String(payload.reason).replaceAll("_", " ")
+      : "";
+    if (from && to && from !== to) {
+      return `${from} → ${to}`;
+    }
+    return reason || (from && to ? `${from} → ${to}` : null);
   }
 
-  if (eventType === "reviewer_rejected" || eventType === "admin_rejected") {
-    return payload.comment ? `Reason: ${payload.comment}` : "No reason provided";
+  if (
+    eventType === "reviewer_rejected" ||
+    eventType === "library_staff_rejected" ||
+    eventType === "director_rejected" ||
+    eventType === "admin_rejected"
+  ) {
+    return eventComment(payload) ? `Reason: ${eventComment(payload)}` : "No reason provided";
   }
 
-  return null;
+  return eventComment(payload);
+}
+
+function timelineColor(eventType) {
+  const color = eventColor(eventType);
+  if (color === "green" || color === "red" || color === "blue") {
+    return color;
+  }
+  if (color === "cyan") {
+    return "blue";
+  }
+  return "gray";
 }
 
 async function parseResponse(response) {
@@ -263,6 +544,7 @@ function App() {
   const [loginForm] = Form.useForm();
   const [submissionForm] = Form.useForm();
   const [auth, setAuth] = useState(null);
+  const [loginMethod, setLoginMethod] = useState("username");
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isSubmittingSubmission, setIsSubmittingSubmission] = useState(false);
   const [isDeletingSubmission, setIsDeletingSubmission] = useState(false);
@@ -276,6 +558,8 @@ function App() {
   const [isLoadingReviewers, setIsLoadingReviewers] = useState(false);
   const [studentOptions, setStudentOptions] = useState([]);
   const [isLoadingStudents, setIsLoadingStudents] = useState(false);
+  const [adminDashTab, setAdminDashTab] = useState("admin");
+  const [adminSubmissionModalOpen, setAdminSubmissionModalOpen] = useState(false);
   const [archiveFaculties, setArchiveFaculties] = useState([]);
   const [archiveSemesters, setArchiveSemesters] = useState([]);
   const [archivePeriods, setArchivePeriods] = useState([]);
@@ -284,6 +568,11 @@ function App() {
   const [isLoadingArchivePeriods, setIsLoadingArchivePeriods] = useState(false);
   const [reviewerQueue, setReviewerQueue] = useState([]);
   const [reviewerSearch, setReviewerSearch] = useState("");
+  const [reviewerSemesterFilter, setReviewerSemesterFilter] = useState();
+  const [reviewerPeriodFilter, setReviewerPeriodFilter] = useState();
+  const [staffSearch, setStaffSearch] = useState("");
+  const [staffSemesterFilter, setStaffSemesterFilter] = useState();
+  const [staffPeriodFilter, setStaffPeriodFilter] = useState();
   const [isLoadingReviewerQueue, setIsLoadingReviewerQueue] = useState(false);
   const [isLoadingLibraryQueue, setIsLoadingLibraryQueue] = useState(false);
   const [isLoadingDirectorQueue, setIsLoadingDirectorQueue] = useState(false);
@@ -296,15 +585,60 @@ function App() {
   const [libraryRejectReason, setLibraryRejectReason] = useState("");
   const [libraryActionLoadingId, setLibraryActionLoadingId] = useState(null);
   const [directorActionLoadingId, setDirectorActionLoadingId] = useState(null);
+  const [directorRejectModalOpen, setDirectorRejectModalOpen] = useState(false);
+  const [directorRejectTargetId, setDirectorRejectTargetId] = useState(null);
+  const [directorRejectReason, setDirectorRejectReason] = useState("");
   const [staffDetailRecord, setStaffDetailRecord] = useState(null);
   const [studentDetailRecord, setStudentDetailRecord] = useState(null);
   const [reviewerDetailRecord, setReviewerDetailRecord] = useState(null);
   const [fileOpenLoadingKey, setFileOpenLoadingKey] = useState(null);
   const [editingSubmissionId, setEditingSubmissionId] = useState(null);
   const [editingSubmissionStatus, setEditingSubmissionStatus] = useState(null);
+  const [submissionFormFields, setSubmissionFormFields] = useState([]);
   const [isSavingDraft, setIsSavingDraft] = useState(false);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const oauthError = params.get("error");
+    const accessToken = params.get("access_token");
+    if (oauthError || accessToken) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+    if (oauthError) {
+      const oauthMessages = {
+        domain: "Only verified @hcmut.edu.vn Google accounts can sign in.",
+        not_registered: "This account has not been created. Ask an administrator to add you to a faculty first.",
+        cancelled: "Google sign-in was cancelled.",
+        disabled: "This account has been disabled.",
+        maintenance: "System is in maintenance mode. Only administrators can sign in.",
+        oauth: "Google sign-in failed. Please try again."
+      };
+      message.error(oauthMessages[oauthError] || "Google sign-in failed. Please try again.");
+    }
+
+    const finishGoogleSession = async (token) => {
+      try {
+        const response = await fetch("/api/auth/me", {
+          headers: authHeaders(token)
+        });
+        const user = await parseResponse(response);
+        if (!response.ok || !user?.username || !user?.role) {
+          throw new Error(user?.message || "Unable to complete Google sign-in");
+        }
+        const nextAuth = { token, user };
+        setAuth(nextAuth);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextAuth));
+        message.success("Login successful");
+      } catch (error) {
+        message.error(error.message || "Unable to complete Google sign-in");
+      }
+    };
+
+    if (accessToken) {
+      void finishGoogleSession(accessToken);
+      return;
+    }
+
     const stored = localStorage.getItem(STORAGE_KEY);
     if (!stored) {
       return;
@@ -313,10 +647,36 @@ function App() {
       const parsed = JSON.parse(stored);
       if (parsed?.token && parsed?.user?.username && parsed?.user?.role) {
         setAuth(parsed);
+        void fetch("/api/auth/me", { headers: authHeaders(parsed.token) })
+          .then((response) => parseResponse(response).then((user) => ({ ok: response.ok, user })))
+          .then(({ ok, user }) => {
+            if (!ok || !user?.username || !user?.role) {
+              return;
+            }
+            const nextAuth = { token: parsed.token, user };
+            setAuth(nextAuth);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(nextAuth));
+          })
+          .catch(() => undefined);
       }
     } catch (error) {
       localStorage.removeItem(STORAGE_KEY);
     }
+  }, []);
+
+  useEffect(() => {
+    const loadLoginOptions = async () => {
+      try {
+        const response = await fetch("/api/auth/login-options");
+        const payload = await parseResponse(response);
+        if (response.ok && (payload?.method === "google" || payload?.method === "username")) {
+          setLoginMethod(payload.method);
+        }
+      } catch (_error) {
+        setLoginMethod("username");
+      }
+    };
+    void loadLoginOptions();
   }, []);
 
   const greeting = useMemo(() => {
@@ -326,32 +686,35 @@ function App() {
     return `Welcome back, ${auth.user.username}.`;
   }, [auth]);
 
-  const reviewerFiltered = useMemo(() => {
-    const q = reviewerSearch.trim().toLowerCase();
-    if (!q) {
-      return reviewerQueue;
+  const reviewerFiltered = useMemo(
+    () => filterBySearchAndArchive(reviewerQueue, reviewerSearch, reviewerSemesterFilter, reviewerPeriodFilter),
+    [reviewerQueue, reviewerSearch, reviewerSemesterFilter, reviewerPeriodFilter]
+  );
+
+  const staffFilterSource = useMemo(() => {
+    const byId = new Map();
+    for (const item of [...staffSubmissions, ...libraryQueue, ...directorQueue]) {
+      if (item?.id && !byId.has(item.id)) {
+        byId.set(item.id, item);
+      }
     }
-    return reviewerQueue.filter((item) => {
-      const text = [
-        item.title,
-        item.title_vi,
-        item.title_en,
-        item.student_email,
-        item.thesis_advisors,
-        item.major,
-        item.thesis_year,
-        item.author,
-        item.advisor,
-        item.abstract,
-        item.submitter,
-        item.submitter_username
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return text.includes(q);
-    });
-  }, [reviewerQueue, reviewerSearch]);
+    return [...byId.values()];
+  }, [staffSubmissions, libraryQueue, directorQueue]);
+
+  const staffFilteredSubmissions = useMemo(
+    () => filterBySearchAndArchive(staffSubmissions, staffSearch, staffSemesterFilter, staffPeriodFilter),
+    [staffSubmissions, staffSearch, staffSemesterFilter, staffPeriodFilter]
+  );
+
+  const libraryFilteredQueue = useMemo(
+    () => filterBySearchAndArchive(libraryQueue, staffSearch, staffSemesterFilter, staffPeriodFilter),
+    [libraryQueue, staffSearch, staffSemesterFilter, staffPeriodFilter]
+  );
+
+  const directorFilteredQueue = useMemo(
+    () => filterBySearchAndArchive(directorQueue, staffSearch, staffSemesterFilter, staffPeriodFilter),
+    [directorQueue, staffSearch, staffSemesterFilter, staffPeriodFilter]
+  );
 
   const reviewerNeedMyDecision = useMemo(
     () => reviewerFiltered.filter((item) => item.my_decision === "pending"),
@@ -372,41 +735,168 @@ function App() {
   const submissionPeriodId = Form.useWatch("submissionPeriodId", submissionForm);
   const archiveFacultyId = Form.useWatch("archiveFacultyId", submissionForm);
   const archiveSemesterId = Form.useWatch("archiveSemesterId", submissionForm);
+  const watchedStudentId = Form.useWatch("studentId", submissionForm);
+  const isAdminActor = auth?.user?.role === "admin";
+  const facultySelectOptions = useMemo(() => {
+    const locked = isAdminActor
+      ? studentOptions.find((item) => item.value === watchedStudentId)
+      : auth?.user?.facultyId
+        ? { facultyId: auth.user.facultyId, facultyName: auth.user.facultyName }
+        : null;
+    if (!locked?.facultyId) {
+      return archiveFaculties;
+    }
+    if (archiveFaculties.some((item) => item.value === locked.facultyId)) {
+      return archiveFaculties;
+    }
+    return [{ value: locked.facultyId, label: locked.facultyName || locked.facultyId }, ...archiveFaculties];
+  }, [archiveFaculties, auth?.user?.facultyId, auth?.user?.facultyName, isAdminActor, studentOptions, watchedStudentId]);
+  const actingStudentId = isAdminActor ? watchedStudentId : auth?.user?.id;
+
+  const configurableFormFields = useMemo(
+    () =>
+      (Array.isArray(submissionFormFields) ? submissionFormFields : []).filter(
+        (field) => field.fieldKey !== "author" && field.fieldKey !== "title"
+      ),
+    [submissionFormFields]
+  );
+
+  const loadSubmissionFormFields = async (token) => {
+    try {
+      const response = await fetch("/api/submissions/form-fields", {
+        headers: { ...authHeaders(token) }
+      });
+      const payload = await parseResponse(response);
+      if (!response.ok || !Array.isArray(payload)) {
+        return [];
+      }
+      setSubmissionFormFields(payload);
+      return payload;
+    } catch {
+      return [];
+    }
+  };
+
+  const applyFormFieldDefaults = (fields, currentValues = {}) => {
+    const patch = {};
+    for (const field of fields || []) {
+      if (field.fieldKey === "author" || field.fieldKey === "title") {
+        continue;
+      }
+      if (currentValues[field.fieldKey] != null && String(currentValues[field.fieldKey]).trim() !== "") {
+        continue;
+      }
+      if (field.defaultValue) {
+        patch[field.fieldKey] = field.defaultValue;
+      }
+    }
+    if (Object.keys(patch).length > 0) {
+      submissionForm.setFieldsValue(patch);
+    }
+  };
   const periodSelected = Boolean(submissionPeriodId);
 
   const studentActiveSubmission = useMemo(
     () =>
       studentSubmissions.find(
-        (item) => isSubmittedStatus(item.status) && item.submitter_id === auth?.user?.id
+        (item) => isSubmittedStatus(item.status) && isSubmissionSubmitter(item, actingStudentId)
       ),
-    [studentSubmissions, auth?.user?.id]
+    [studentSubmissions, actingStudentId]
   );
 
-  const studentDraftSubmissions = useMemo(
+  const studentOwnDraft = useMemo(
     () =>
-      studentSubmissions.filter(
-        (item) => item.status === "draft" && item.submitter_id === auth?.user?.id
-      ),
-    [studentSubmissions, auth?.user?.id]
+      studentSubmissions.find(
+        (item) => item.status === "draft" && isSubmissionSubmitter(item, actingStudentId)
+      ) ?? null,
+    [studentSubmissions, actingStudentId]
   );
+
+  /** Submitted thesis the student should see as details (own first, otherwise co-authored). */
+  const studentPrimarySubmitted = useMemo(() => {
+    if (studentActiveSubmission) {
+      return studentActiveSubmission;
+    }
+    return (
+      (studentSubmissions || []).find(
+        (item) => isSubmittedStatus(item.status) && isSubmissionCoAuthor(item, actingStudentId)
+      ) ?? null
+    );
+  }, [studentActiveSubmission, studentSubmissions, actingStudentId]);
 
   const editingSubmissionRecord = useMemo(
-    () => studentSubmissions.find((item) => item.id === editingSubmissionId) ?? null,
-    [studentSubmissions, editingSubmissionId]
+    () =>
+      studentSubmissions.find((item) => item.id === editingSubmissionId) ??
+      staffSubmissions.find((item) => item.id === editingSubmissionId) ??
+      null,
+    [studentSubmissions, staffSubmissions, editingSubmissionId]
   );
+
+  const isFormReadOnly = useMemo(() => {
+    if (isAdminActor) {
+      return false;
+    }
+    if (!editingSubmissionRecord || !auth?.user?.id) {
+      return false;
+    }
+    return !isSubmissionSubmitter(editingSubmissionRecord, auth.user.id);
+  }, [isAdminActor, editingSubmissionRecord, auth?.user?.id]);
+
+  const canChangeSubmissionPeriod = useMemo(() => {
+    if (isFormReadOnly) {
+      return false;
+    }
+    // Draft: allow changing period. Submitted theses keep period locked.
+    if (!editingSubmissionId) {
+      return true;
+    }
+    return editingSubmissionStatus === "draft";
+  }, [isFormReadOnly, editingSubmissionId, editingSubmissionStatus]);
 
   const editingSubmissionCapabilities = useMemo(
     () =>
       editingSubmissionRecord
-        ? getStudentSubmissionCapabilities(editingSubmissionRecord)
-        : { canEdit: true, canDelete: false, canRevertToDraft: false, canSubmit: !studentActiveSubmission },
-    [editingSubmissionRecord, studentActiveSubmission]
+        ? getStudentSubmissionCapabilities(editingSubmissionRecord, actingStudentId, studentSubmissions)
+        : {
+            canEdit: Boolean(actingStudentId),
+            canDelete: false,
+            canRevertToDraft: false,
+            canSubmit:
+              Boolean(actingStudentId) &&
+              canStudentSubmitThesis(studentSubmissions, actingStudentId, null, null)
+          },
+    [editingSubmissionRecord, studentSubmissions, actingStudentId]
   );
 
   const canSubmitCurrentThesis = useMemo(
-    () => canStudentSubmitThesis(studentActiveSubmission, editingSubmissionId, editingSubmissionRecord),
-    [studentActiveSubmission, editingSubmissionId, editingSubmissionRecord]
+    () =>
+      Boolean(actingStudentId) &&
+      canStudentSubmitThesis(
+        studentSubmissions,
+        actingStudentId,
+        editingSubmissionId,
+        editingSubmissionRecord
+      ),
+    [studentSubmissions, actingStudentId, editingSubmissionId, editingSubmissionRecord]
   );
+
+  const canSaveCurrentDraft = useMemo(
+    () =>
+      Boolean(actingStudentId) &&
+      canStudentSaveDraft(studentSubmissions, actingStudentId, editingSubmissionRecord),
+    [studentSubmissions, actingStudentId, editingSubmissionRecord]
+  );
+
+  const submitBlockMessage = useMemo(() => {
+    if (!actingStudentId) {
+      return isAdminActor ? "Select a student to create or submit a thesis on their behalf." : null;
+    }
+    const excludeId =
+      editingSubmissionRecord && isSubmissionSubmitter(editingSubmissionRecord, actingStudentId)
+        ? editingSubmissionId
+        : undefined;
+    return studentBlocksNewDraftOrSubmit(studentSubmissions, actingStudentId, excludeId);
+  }, [isAdminActor, studentSubmissions, actingStudentId, editingSubmissionId, editingSubmissionRecord]);
 
   const submissionColumns = [
     {
@@ -431,8 +921,8 @@ function App() {
     },
     {
       title: "Reviewers",
-      dataIndex: "advisor",
-      key: "advisor"
+      dataIndex: "reviewer",
+      key: "reviewer"
     },
     {
       title: "Status",
@@ -473,53 +963,24 @@ function App() {
     {
       title: "Actions",
       key: "actions",
-      width: 220,
-      render: (_value, record) => (
-        <Space>
-          <Button type="link" size="small" onClick={() => setStudentDetailRecord(record)}>
-            Detail
-          </Button>
-          {getStudentSubmissionCapabilities(record).canEdit ? (
-            <Button type="primary" size="small" onClick={() => loadSubmissionIntoForm(record)}>
-              Edit
-            </Button>
-          ) : null}
-          {getStudentSubmissionCapabilities(record).canDelete ? (
-            <Button danger size="small" onClick={() => void promptDeleteSubmission(record)}>
-              Delete
-            </Button>
-          ) : null}
-        </Space>
-      )
-    }
-  ];
-
-  const draftColumns = submissionColumns
-    .filter((col) => col.key !== "reviews" && col.key !== "actions")
-    .concat([
-      {
-        title: "Actions",
-        key: "draft_actions",
-        width: 160,
-        render: (_value, record) => (
-          <Space>
-            <Button type="link" size="small" onClick={() => setStudentDetailRecord(record)}>
-              Detail
-            </Button>
-            {getStudentSubmissionCapabilities(record).canEdit ? (
-              <Button type="primary" size="small" onClick={() => loadSubmissionIntoForm(record)}>
+      width: 100,
+      render: (_value, record) => {
+        const caps = getStudentSubmissionCapabilities(record, actingStudentId, studentSubmissions);
+        return (
+          <Space size={0}>
+            {isAdminActor || caps.canEdit ? (
+              <Button type="link" size="small" onClick={() => void loadSubmissionIntoForm(record)}>
                 Edit
               </Button>
             ) : null}
-            {getStudentSubmissionCapabilities(record).canDelete ? (
-              <Button danger size="small" onClick={() => void promptDeleteSubmission(record)}>
-                Delete
-              </Button>
-            ) : null}
+            <Button type="link" size="small" onClick={() => setStudentDetailRecord(record)}>
+              Detail
+            </Button>
           </Space>
-        )
+        );
       }
-    ]);
+    }
+  ];
 
   const adminSubmissionColumns = [
     {
@@ -555,8 +1016,8 @@ function App() {
     },
     {
       title: "Reviewers",
-      dataIndex: "advisor",
-      key: "advisor",
+      dataIndex: "reviewer",
+      key: "reviewer",
       ellipsis: true,
       width: 160
     },
@@ -595,9 +1056,16 @@ function App() {
       width: 110,
       fixed: "right",
       render: (_v, record) => (
-        <Button type="link" size="small" onClick={() => setStaffDetailRecord(record)}>
-          Full detail
-        </Button>
+        <Space size={0}>
+          {isAdminActor ? (
+            <Button type="link" size="small" onClick={() => void handleAdminEditSubmission(record)}>
+              Edit
+            </Button>
+          ) : null}
+          <Button type="link" size="small" onClick={() => setStaffDetailRecord(record)}>
+            Full detail
+          </Button>
+        </Space>
       )
     }
   ];
@@ -643,8 +1111,8 @@ function App() {
     },
     {
       title: "Reviewers (assigned)",
-      dataIndex: "advisor",
-      key: "advisor",
+      dataIndex: "reviewer",
+      key: "reviewer",
       width: 200,
       ellipsis: true
     },
@@ -747,8 +1215,8 @@ function App() {
     },
     {
       title: "Reviewers",
-      dataIndex: "advisor",
-      key: "advisor",
+      dataIndex: "reviewer",
+      key: "reviewer",
       width: 220,
       ellipsis: true
     },
@@ -856,6 +1324,35 @@ function App() {
         throw new Error("Unable to load submission list");
       }
       setStudentSubmissions(payload);
+      setEditingSubmissionId((currentId) => {
+        if (!currentId) {
+          return null;
+        }
+        const current = payload.find((item) => item.id === currentId);
+        // Only the submitter may keep a thesis loaded in the entry form (no co-author autofill).
+        if (current && isSubmissionSubmitter(current, studentId)) {
+          setEditingSubmissionStatus(current.status === "reject" ? "rejected" : current.status);
+          return currentId;
+        }
+        setEditingSubmissionStatus(null);
+        submissionForm.resetFields();
+        setArchiveSemesters([]);
+        setArchivePeriods([]);
+        const option = studentOptions.find((item) => item.value === studentId);
+        const isAdmin = auth?.user?.role === "admin";
+        submissionForm.setFieldsValue({
+          studentId,
+          authorIds: isAdmin ? undefined : [studentId],
+          email: option?.username
+            ? studentEmailFromUser({ username: option.username })
+            : isAdmin
+              ? ""
+              : studentEmailFromUser(auth?.user),
+          thesisYear: String(new Date().getFullYear()),
+          ...defaultArchiveMetadata()
+        });
+        return null;
+      });
     } catch (error) {
       message.error(error.message || "Unable to load submission list");
     } finally {
@@ -868,7 +1365,7 @@ function App() {
       void loadStudentSubmissions(auth.user.id);
     }
     const role = auth?.user?.role;
-    if (role === "library_staff" || role === "director") {
+    if (role === "library_staff" || role === "director" || role === "admin") {
       void loadStaffSubmissions();
     }
     if (role === "library_staff") {
@@ -908,7 +1405,9 @@ function App() {
   const loadReviewers = async () => {
     setIsLoadingReviewers(true);
     try {
-      const response = await fetch("/api/users?role=reviewer");
+      const response = await fetch("/api/users?role=reviewer", {
+        headers: { ...authHeaders(auth?.token) }
+      });
       const payload = await parseResponse(response);
       if (!response.ok || !Array.isArray(payload)) {
         throw new Error("Unable to load reviewer list");
@@ -939,7 +1438,7 @@ function App() {
       setArchiveFaculties(
         payload.map((item) => ({
           value: item.id,
-          label: `${item.name} (${item.code})`
+          label: item.name
         }))
       );
     } catch (error) {
@@ -952,7 +1451,7 @@ function App() {
   const loadArchiveSemesters = async (facultyId) => {
     if (!facultyId) {
       setArchiveSemesters([]);
-      return;
+      return [];
     }
     setIsLoadingArchiveSemesters(true);
     try {
@@ -963,14 +1462,16 @@ function App() {
       if (!response.ok || !Array.isArray(payload)) {
         throw new Error("Unable to load semesters");
       }
-      setArchiveSemesters(
-        payload.map((item) => ({
-          value: item.id,
-          label: `${item.name} (${item.code})`
-        }))
-      );
+      const options = payload.map((item) => ({
+        value: item.id,
+        label: item.name
+      }));
+      setArchiveSemesters(options);
+      return options;
     } catch (error) {
       message.error(error.message || "Unable to load semesters");
+      setArchiveSemesters([]);
+      return [];
     } finally {
       setIsLoadingArchiveSemesters(false);
     }
@@ -979,7 +1480,7 @@ function App() {
   const loadArchivePeriods = async (facultyId, semesterId) => {
     if (!facultyId || !semesterId) {
       setArchivePeriods([]);
-      return;
+      return [];
     }
     setIsLoadingArchivePeriods(true);
     try {
@@ -992,20 +1493,14 @@ function App() {
         throw new Error("Unable to load submission periods");
       }
       setArchivePeriods(payload);
+      return payload;
     } catch (error) {
       message.error(error.message || "Unable to load submission periods");
+      setArchivePeriods([]);
+      return [];
     } finally {
       setIsLoadingArchivePeriods(false);
     }
-  };
-
-  const handleArchiveFacultyChange = async (facultyId) => {
-    submissionForm.setFieldsValue({
-      archiveSemesterId: undefined,
-      submissionPeriodId: undefined
-    });
-    setArchivePeriods([]);
-    await loadArchiveSemesters(facultyId);
   };
 
   const handleArchiveSemesterChange = async (semesterId) => {
@@ -1024,7 +1519,9 @@ function App() {
   const loadStudents = async () => {
     setIsLoadingStudents(true);
     try {
-      const response = await fetch("/api/users?role=student");
+      const response = await fetch("/api/users?role=student", {
+        headers: { ...authHeaders(auth?.token) }
+      });
       const payload = await parseResponse(response);
       if (!response.ok || !Array.isArray(payload)) {
         throw new Error("Unable to load student list");
@@ -1032,7 +1529,10 @@ function App() {
       setStudentOptions(
         payload.map((item) => ({
           value: item.id,
-          label: `${item.displayName || item.username} (${item.username})`
+          label: `${item.displayName || item.username} (${item.username})`,
+          username: item.username,
+          facultyId: item.facultyId || "",
+          facultyName: item.facultyName || ""
         }))
       );
     } catch (error) {
@@ -1046,7 +1546,7 @@ function App() {
     if (!auth?.user) {
       return;
     }
-    if (auth.user.role === "student") {
+    if (auth.user.role === "student" || auth.user.role === "admin") {
       void loadReviewers();
       void loadStudents();
       void loadArchiveFaculties();
@@ -1059,14 +1559,24 @@ function App() {
         studentId: auth.user.id,
         authorIds: [auth.user.id],
         email: studentEmailFromUser(auth.user),
-        thesisYear: String(new Date().getFullYear())
+        archiveFacultyId: auth.user.facultyId || undefined,
+        thesisYear: String(new Date().getFullYear()),
+        ...defaultArchiveMetadata()
       });
+      if (auth.user.facultyId) {
+        void loadArchiveSemesters(auth.user.facultyId);
+      }
+      void loadSubmissionFormFields(auth.token).then((fields) => applyFormFieldDefaults(fields));
     }
-    if (auth?.user?.role !== "student") {
+    if (auth?.user?.role === "admin") {
       submissionForm.setFieldsValue({
         studentId: undefined,
-        authorIds: undefined
+        authorIds: undefined,
+        email: "",
+        thesisYear: String(new Date().getFullYear()),
+        ...defaultArchiveMetadata()
       });
+      void loadSubmissionFormFields(auth.token).then((fields) => applyFormFieldDefaults(fields));
     }
   }, [auth, submissionForm]);
 
@@ -1094,7 +1604,9 @@ function App() {
           payload?.message ||
             (response.status === 401
               ? "Invalid username or password"
-              : "Login failed. Please check backend server and API URL.")
+              : response.status === 403
+                ? "Password login is disabled. Use Google sign-in."
+                : "Login failed. Please check backend server and API URL.")
         );
       }
 
@@ -1121,16 +1633,117 @@ function App() {
     }
   };
 
+  const resolveStudentEmail = (studentId) => {
+    if (!studentId) {
+      return "";
+    }
+    if (auth?.user?.role === "student" && studentId === auth.user.id) {
+      return studentEmailFromUser(auth.user);
+    }
+    const option = studentOptions.find((item) => item.value === studentId);
+    if (option?.username) {
+      return studentEmailFromUser({ username: option.username });
+    }
+    return "";
+  };
+
+  const refreshAfterSubmissionWrite = async () => {
+    if (auth?.user?.role === "student") {
+      await loadStudentSubmissions(auth.user.id);
+      return;
+    }
+    if (auth?.user?.role === "admin") {
+      await loadStaffSubmissions();
+      const studentId = submissionForm.getFieldValue("studentId");
+      if (studentId) {
+        await loadStudentSubmissions(studentId);
+      }
+    }
+  };
+
+  const handleAdminStudentChange = (studentId) => {
+    setEditingSubmissionId(null);
+    setEditingSubmissionStatus(null);
+    const email = resolveStudentEmail(studentId);
+    submissionForm.setFieldsValue({
+      studentId,
+      email,
+      authorIds: undefined,
+      archiveFacultyId: undefined,
+      archiveSemesterId: undefined,
+      submissionPeriodId: undefined,
+      thesisFile: []
+    });
+    setArchiveSemesters([]);
+    setArchivePeriods([]);
+    if (studentId) {
+      void loadStudentSubmissions(studentId);
+    } else {
+      setStudentSubmissions([]);
+    }
+  };
+
+  const applyStudentFaculty = (studentId) => {
+    const student = studentOptions.find((item) => item.value === studentId);
+    const facultyId = student?.facultyId || "";
+    submissionForm.setFieldsValue({
+      archiveFacultyId: facultyId || undefined,
+      archiveSemesterId: undefined,
+      submissionPeriodId: undefined
+    });
+    setArchivePeriods([]);
+    if (facultyId) {
+      void loadArchiveSemesters(facultyId);
+    } else {
+      setArchiveSemesters([]);
+    }
+  };
+
+  const handleAdminAuthorsChange = (authorIds) => {
+    const selected = Array.isArray(authorIds) ? authorIds.filter(Boolean) : [];
+    const currentStudentId = submissionForm.getFieldValue("studentId");
+    if (currentStudentId && selected.includes(currentStudentId)) {
+      return;
+    }
+    const nextStudentId = selected[0];
+    if (!nextStudentId) {
+      submissionForm.setFieldsValue({
+        studentId: undefined,
+        email: "",
+        archiveFacultyId: undefined,
+        archiveSemesterId: undefined,
+        submissionPeriodId: undefined
+      });
+      setArchiveSemesters([]);
+      setArchivePeriods([]);
+      setStudentSubmissions([]);
+      return;
+    }
+    submissionForm.setFieldsValue({
+      studentId: nextStudentId,
+      email: resolveStudentEmail(nextStudentId)
+    });
+    applyStudentFaculty(nextStudentId);
+    void loadStudentSubmissions(nextStudentId);
+  };
+
   const buildSubmissionFormData = (values, { requireThesisFile = false } = {}) => {
     const formData = new FormData();
-    const studentId = auth.user.id;
-    const authorIds = Array.isArray(values.authorIds) ? values.authorIds : [];
+    const authorIds = Array.isArray(values.authorIds) ? values.authorIds.filter(Boolean) : [];
+    const studentId =
+      auth.user.role === "admin" ? values.studentId || authorIds[0] : auth.user.id;
     const reviewerIds = Array.isArray(values.reviewerIds) ? values.reviewerIds : [];
-    if (!authorIds.includes(auth.user.id)) {
-      throw new Error("Students must include themselves in the author list");
+    if (!studentId) {
+      throw new Error("Please select a student author");
+    }
+    if (authorIds.length === 0) {
+      throw new Error("Please search and select at least one student author");
+    }
+    if (!authorIds.includes(studentId)) {
+      throw new Error("The submitting student must be included in the author list");
     }
     formData.append("studentId", studentId);
-    formData.append("email", (values.email || studentEmailFromUser(auth.user)).trim());
+    formData.append("email", (values.email || resolveStudentEmail(studentId)).trim());
     if (values.titleVi?.trim()) {
       formData.append("titleVi", values.titleVi.trim());
     }
@@ -1146,9 +1759,33 @@ function App() {
     if (values.thesisYear) {
       formData.append("thesisYear", String(values.thesisYear).trim());
     }
-    if (values.abstract?.trim()) {
-      formData.append("abstract", values.abstract.trim());
+    const metadata = {};
+    for (const field of configurableFormFields) {
+      const raw = values[field.fieldKey];
+      if (raw == null) {
+        continue;
+      }
+      const text = String(raw).trim();
+      if (!text) {
+        continue;
+      }
+      metadata[field.fieldKey] = text;
+      if (
+        field.fieldKey === "dateIssued" ||
+        field.fieldKey === "publisher" ||
+        field.fieldKey === "documentType" ||
+        field.fieldKey === "language" ||
+        field.fieldKey === "description" ||
+        field.fieldKey === "abstract"
+      ) {
+        formData.append(field.fieldKey, text);
+      }
     }
+    if (!metadata.dateIssued && values.thesisYear) {
+      metadata.dateIssued = String(values.thesisYear).trim();
+      formData.append("dateIssued", metadata.dateIssued);
+    }
+    formData.append("metadata", JSON.stringify(metadata));
     formData.append("authorIds", JSON.stringify(authorIds));
     formData.append("reviewerIds", JSON.stringify(reviewerIds));
     if (values.submissionPeriodId) {
@@ -1167,46 +1804,121 @@ function App() {
   };
 
   const resetSubmissionForm = () => {
+    const studentId = auth.user.role === "admin" ? submissionForm.getFieldValue("studentId") : auth.user.id;
     setEditingSubmissionId(null);
     setEditingSubmissionStatus(null);
     submissionForm.resetFields();
     setArchiveSemesters([]);
     setArchivePeriods([]);
     submissionForm.setFieldsValue({
-      studentId: auth.user.id,
-      authorIds: [auth.user.id],
-      email: studentEmailFromUser(auth.user),
-      thesisYear: String(new Date().getFullYear())
+      studentId,
+      authorIds: auth.user.role === "admin" ? undefined : studentId ? [studentId] : undefined,
+      email: resolveStudentEmail(studentId),
+      thesisYear: String(new Date().getFullYear()),
+      ...defaultArchiveMetadata()
     });
+    if (auth.user.role === "admin") {
+      setAdminSubmissionModalOpen(false);
+    }
   };
 
-  const loadSubmissionIntoForm = (record) => {
+  const openAdminCreateSubmission = () => {
+    setEditingSubmissionId(null);
+    setEditingSubmissionStatus(null);
+    submissionForm.resetFields();
+    setArchiveSemesters([]);
+    setArchivePeriods([]);
+    submissionForm.setFieldsValue({
+      authorIds: undefined,
+      thesisYear: String(new Date().getFullYear()),
+      ...defaultArchiveMetadata()
+    });
+    setAdminSubmissionModalOpen(true);
+  };
+
+  const loadSubmissionIntoForm = async (record) => {
+    const recordStudentId = record.submitter_id;
+    if (!isAdminActor && !isSubmissionSubmitter(record, auth.user.id)) {
+      message.warning("Only the submitter can edit this thesis. Use Detail to view.");
+      return;
+    }
+    if (isAdminActor && recordStudentId) {
+      submissionForm.setFieldsValue({ studentId: recordStudentId });
+      await loadStudentSubmissions(recordStudentId);
+    }
     setEditingSubmissionId(record.id);
     setEditingSubmissionStatus(record.status);
     const authorIds = Array.isArray(record.author_user_ids) ? record.author_user_ids : [];
     const reviewerIds = Array.isArray(record.reviewer_user_ids) ? record.reviewer_user_ids : [];
+    const facultyId = record.faculty_id || undefined;
+    const semesterId = record.semester_id || undefined;
+    const periodId = record.submission_period_id || undefined;
+
+    if (facultyId) {
+      setArchiveFaculties((prev) => {
+        if (prev.some((item) => item.value === facultyId)) {
+          return prev;
+        }
+        const label = record.faculty_name
+          ? `${record.faculty_name}`
+          : facultyId;
+        return [...prev, { value: facultyId, label }];
+      });
+      const semesterOptions = await loadArchiveSemesters(facultyId);
+      if (semesterId && !semesterOptions.some((item) => item.value === semesterId)) {
+        setArchiveSemesters((prev) => [
+          ...prev,
+          {
+            value: semesterId,
+            label: record.semester_name || semesterId
+          }
+        ]);
+      }
+      if (facultyId && semesterId) {
+        const periods = await loadArchivePeriods(facultyId, semesterId);
+        if (periodId && !periods.some((item) => item.id === periodId)) {
+          setArchivePeriods((prev) => [
+            ...prev,
+            {
+              id: periodId,
+              name: "Saved submission period",
+              closesAt: new Date().toISOString()
+            }
+          ]);
+        }
+      }
+    }
+
     submissionForm.setFieldsValue({
-      email: record.student_email || studentEmailFromUser(auth.user),
+      email: record.student_email || resolveStudentEmail(recordStudentId),
       titleVi: record.title_vi || "",
       titleEn: record.title_en || record.title || "",
       thesisAdvisors: record.thesis_advisors || "",
       major: record.major || "",
       thesisYear: record.thesis_year || String(new Date().getFullYear()),
+      dateIssued: record.date_issued || record.thesis_year || String(new Date().getFullYear()),
+      publisher: record.publisher || record.university_name || DEFAULT_PUBLISHER,
+      documentType: record.document_type || "Thesis",
+      language: record.language || "vie",
+      description: record.description || "",
       abstract: record.abstract || "",
-      authorIds: authorIds.length > 0 ? authorIds : [auth.user.id],
+      ...(record.extra_metadata && typeof record.extra_metadata === "object" ? record.extra_metadata : {}),
+      authorIds: authorIds.length > 0 ? authorIds : recordStudentId ? [recordStudentId] : undefined,
       reviewerIds,
-      submissionPeriodId: record.submission_period_id,
-      thesisFile: []
+      archiveFacultyId: facultyId,
+      archiveSemesterId: semesterId,
+      submissionPeriodId: periodId,
+      thesisFile: thesisFileListFromRecord(record)
     });
+    void loadSubmissionFormFields(auth.token);
     window.scrollTo({ top: 0, behavior: "smooth" });
-    const status = record.status === "reject" ? "rejected" : record.status;
-    message.info(
-      status === "rejected" || status === "approved"
-        ? "Edit your thesis and submit again for review"
-        : status === "reviewing"
-          ? "Update your thesis while reviewers have not decided yet"
-          : "Continue editing your draft"
-    );
+  };
+
+  const handleAdminEditSubmission = async (record) => {
+    setAdminDashTab("submissions");
+    setStaffDetailRecord(null);
+    setAdminSubmissionModalOpen(true);
+    await loadSubmissionIntoForm(record);
   };
 
   const handleDeleteSubmission = async (submissionId) => {
@@ -1220,11 +1932,33 @@ function App() {
       if (!response.ok) {
         throw new Error(payload?.message || "Failed to delete");
       }
-      message.success("Deleted");
+      if (payload?.dspaceDeleteWarning) {
+        message.warning("Deleted from Portal, but DSpace item may still exist — check logs");
+      } else if (payload?.dspaceDeleted) {
+        message.success("Deleted from Portal and DSpace");
+      } else {
+        message.success("Deleted");
+      }
       if (editingSubmissionId === submissionId) {
         resetSubmissionForm();
       }
-      await loadStudentSubmissions(auth.user.id);
+      setStudentDetailRecord((current) => (current?.id === submissionId ? null : current));
+      setStaffDetailRecord((current) => (current?.id === submissionId ? null : current));
+      if (auth.user.role === "student") {
+        await loadStudentSubmissions(auth.user.id);
+      }
+      if (auth.user.role === "admin") {
+        await refreshAfterSubmissionWrite();
+      }
+      if (canStaffDeleteSubmission(auth.user.role)) {
+        await loadStaffSubmissions();
+        if (auth.user.role === "director") {
+          await loadDirectorQueue();
+        }
+        if (auth.user.role === "library_staff") {
+          await loadLibraryQueue();
+        }
+      }
     } catch (error) {
       message.error(error.message || "Failed to delete");
     } finally {
@@ -1244,6 +1978,139 @@ function App() {
     });
   };
 
+  const promptStaffDeleteSubmission = (record) => {
+    const title = record.title_en || record.title || "this thesis";
+    const archived = record.status === "archived";
+    const hasDspace = Boolean(record.dspace_item_id && !String(record.dspace_item_id).startsWith("dev-item-"));
+    Modal.confirm({
+      title: "Delete submission?",
+      content: archived
+        ? hasDspace
+          ? `Delete "${title}" from Portal and remove the linked DSpace item (${record.dspace_item_id})? This cannot be undone.`
+          : `Delete archived submission "${title}"? This cannot be undone.`
+        : `Delete "${title}"? This cannot be undone.`,
+      okText: "Delete",
+      okType: "danger",
+      cancelText: "Cancel",
+      onOk: () => handleDeleteSubmission(record.id)
+    });
+  };
+
+  const handleSubmitDraftFromDetail = async (record) => {
+    const ownerId = record.submitter_id || auth.user.id;
+    if (!isAdminActor && !isSubmissionSubmitter(record, auth.user.id)) {
+      message.warning("Only the submitter can submit this thesis.");
+      return;
+    }
+    const caps = getStudentSubmissionCapabilities(record, ownerId, studentSubmissions);
+    if (!caps.canSubmit || record.status !== "draft") {
+      message.warning("This thesis cannot be submitted from Detail right now.");
+      return;
+    }
+    setIsSubmittingSubmission(true);
+    try {
+      if (!canStudentSubmitThesis(studentSubmissions, ownerId, record.id, record)) {
+        throw new Error(
+          studentActiveSubmission
+            ? "This student already has a submitted thesis. Edit that thesis to update and resubmit it."
+            : "Unable to submit thesis"
+        );
+      }
+      if (!Array.isArray(record.files) || record.files.length === 0) {
+        throw new Error("Please edit the draft and upload a thesis PDF before submitting");
+      }
+      const authorIds = Array.isArray(record.author_user_ids) ? record.author_user_ids : [];
+      const reviewerIds = Array.isArray(record.reviewer_user_ids) ? record.reviewer_user_ids : [];
+      if (!record.title_vi?.trim()) {
+        throw new Error("Vietnamese thesis title is required — edit the draft first");
+      }
+      if (!(record.title_en || record.title)?.trim()) {
+        throw new Error("English thesis title is required — edit the draft first");
+      }
+      if (!record.thesis_advisors?.trim()) {
+        throw new Error("Advisor(s) is required — edit the draft first");
+      }
+      if (!record.major?.trim()) {
+        throw new Error("Major is required — edit the draft first");
+      }
+      if (!record.thesis_year) {
+        throw new Error("Year is required — edit the draft first");
+      }
+      for (const field of configurableFormFields) {
+        if (!field.required) {
+          continue;
+        }
+        const fromColumn =
+          field.fieldKey === "abstract"
+            ? record.abstract
+            : field.fieldKey === "dateIssued"
+              ? record.date_issued || record.thesis_year
+              : field.fieldKey === "publisher"
+                ? record.publisher || record.university_name
+                : field.fieldKey === "documentType"
+                  ? record.document_type
+                  : field.fieldKey === "language"
+                    ? record.language
+                    : field.fieldKey === "description"
+                      ? record.description
+                      : record.extra_metadata?.[field.fieldKey];
+        if (!String(fromColumn ?? "").trim()) {
+          throw new Error(`${field.label} is required — edit the draft first`);
+        }
+      }
+      if (!record.submission_period_id) {
+        throw new Error("Submission period is required — edit the draft first");
+      }
+      if (reviewerIds.length === 0) {
+        throw new Error("Please select at least one reviewer — edit the draft first");
+      }
+      const formData = buildSubmissionFormData(
+        {
+          studentId: ownerId,
+          email: record.student_email || resolveStudentEmail(ownerId),
+          titleVi: record.title_vi,
+          titleEn: record.title_en || record.title,
+          thesisAdvisors: record.thesis_advisors,
+          major: record.major,
+          thesisYear: record.thesis_year,
+          dateIssued: record.date_issued || record.thesis_year,
+          publisher: record.publisher || record.university_name || DEFAULT_PUBLISHER,
+          documentType: record.document_type || "Thesis",
+          language: record.language || "vie",
+          description: record.description,
+          abstract: record.abstract,
+          authorIds: authorIds.length > 0 ? authorIds : [ownerId],
+          reviewerIds,
+          submissionPeriodId: record.submission_period_id,
+          thesisFile: []
+        },
+        { requireThesisFile: false }
+      );
+      if (!formData) {
+        return;
+      }
+      const response = await fetch(`/api/submissions/${record.id}/submit`, {
+        method: "POST",
+        headers: { ...authHeaders(auth.token) },
+        body: formData
+      });
+      const payload = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(payload?.message || "Failed to submit thesis");
+      }
+      message.success("Thesis submitted successfully");
+      setStudentDetailRecord(null);
+      if (editingSubmissionId === record.id) {
+        resetSubmissionForm();
+      }
+      await refreshAfterSubmissionWrite();
+    } catch (error) {
+      message.error(error.message || "Failed to submit thesis");
+    } finally {
+      setIsSubmittingSubmission(false);
+    }
+  };
+
   const handleRevertToDraft = async () => {
     if (!editingSubmissionId) {
       return;
@@ -1260,7 +2127,7 @@ function App() {
       }
       message.success("Reverted to draft");
       setEditingSubmissionStatus("draft");
-      await loadStudentSubmissions(auth.user.id);
+      await refreshAfterSubmissionWrite();
     } catch (error) {
       message.error(error.message || "Failed to revert to draft");
     } finally {
@@ -1286,12 +2153,15 @@ function App() {
       if (!response.ok) {
         throw new Error(payload?.message || "Failed to save draft");
       }
-      if (!editingSubmissionId && payload?.id) {
+      if (payload?.id) {
         setEditingSubmissionId(payload.id);
-        setEditingSubmissionStatus("draft");
+        setEditingSubmissionStatus(payload.status || "draft");
       }
       message.success("Draft saved");
-      await loadStudentSubmissions(auth.user.id);
+      await refreshAfterSubmissionWrite();
+      if (auth.user.role === "admin") {
+        resetSubmissionForm();
+      }
     } catch (error) {
       message.error(error.message || "Failed to save draft");
     } finally {
@@ -1302,12 +2172,19 @@ function App() {
   const handleSubmitThesis = async (values) => {
     setIsSubmittingSubmission(true);
     try {
-      if (!canStudentSubmitThesis(studentActiveSubmission, editingSubmissionId, editingSubmissionRecord)) {
+      if (
+        !canStudentSubmitThesis(
+          studentSubmissions,
+          actingStudentId,
+          editingSubmissionId,
+          editingSubmissionRecord
+        )
+      ) {
         throw new Error(
           editingSubmissionRecord?.status === "reviewing"
             ? "This thesis is already under review. Revert it to draft first if all reviewers are still pending."
             : studentActiveSubmission
-              ? "You already have a submitted thesis. Edit that thesis to update and resubmit it."
+              ? "This student already has a submitted thesis. Edit that thesis to update and resubmit it."
               : "Unable to submit thesis"
         );
       }
@@ -1332,8 +2209,13 @@ function App() {
       if (!values.thesisYear) {
         throw new Error("Year is required");
       }
-      if (!values.abstract?.trim()) {
-        throw new Error("Abstract is required");
+      for (const field of configurableFormFields) {
+        if (!field.required) {
+          continue;
+        }
+        if (!String(values[field.fieldKey] ?? "").trim()) {
+          throw new Error(`${field.label} is required`);
+        }
       }
       if (!values.submissionPeriodId) {
         throw new Error("Please select a submission period");
@@ -1371,7 +2253,7 @@ function App() {
           : "Thesis submitted successfully"
       );
       resetSubmissionForm();
-      await loadStudentSubmissions(auth.user.id);
+      await refreshAfterSubmissionWrite();
     } catch (error) {
       message.error(error.message || "Failed to submit thesis");
     } finally {
@@ -1458,7 +2340,33 @@ function App() {
       if (!response.ok) {
         throw new Error(payload?.message || "Archive failed");
       }
-      message.success("Submission archived");
+      if (payload?.dspaceDeferred) {
+        message.success(
+          payload?.message ||
+            "Submission archived to period. Push to DSpace later from Archive configuration."
+        );
+      } else if (payload?.dspacePublishError) {
+        message.warning(
+          payload?.dspacePublishMessage ||
+            "Archived in Portal, but DSpace publish failed — check DSpace settings, collection sync, and logs"
+        );
+      } else if (payload?.dspacePlaceholder) {
+        message.warning(
+          `Archived with local placeholder item (${payload.dspaceItemId}). Configure DSpace API to publish for real.`
+        );
+      } else if (payload?.dspaceItemId) {
+        if (payload?.dspacePdfWarning) {
+          message.warning(
+            `Archived and created DSpace item (${payload.dspaceItemId}), but thesis PDF was not uploaded`
+          );
+        } else if (payload?.bitstreamUploaded) {
+          message.success(`Archived to DSpace with PDF (${payload.dspaceItemId})`);
+        } else {
+          message.success(`Archived and published to DSpace (${payload.dspaceItemId})`);
+        }
+      } else {
+        message.success("Submission archived");
+      }
       await loadDirectorQueue();
       await loadStaffSubmissions();
     } catch (error) {
@@ -1466,6 +2374,51 @@ function App() {
     } finally {
       setDirectorActionLoadingId(null);
     }
+  };
+
+  const submitDirectorReject = async (submissionId, comment) => {
+    setDirectorActionLoadingId(submissionId);
+    try {
+      const response = await fetch("/api/reviews/director-action", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(auth.token)
+        },
+        body: JSON.stringify({ submissionId, action: "reject", comment })
+      });
+      const payload = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(payload?.message || "Reject failed");
+      }
+      message.success("Rejected");
+      await loadDirectorQueue();
+      await loadStaffSubmissions();
+    } catch (error) {
+      message.error(error.message || "Reject failed");
+    } finally {
+      setDirectorActionLoadingId(null);
+    }
+  };
+
+  const openDirectorRejectModal = (submissionId) => {
+    setDirectorRejectTargetId(submissionId);
+    setDirectorRejectReason("");
+    setDirectorRejectModalOpen(true);
+  };
+
+  const confirmDirectorReject = async () => {
+    if (!directorRejectTargetId) {
+      return;
+    }
+    if (!directorRejectReason.trim()) {
+      message.error("Please enter a reject reason");
+      return;
+    }
+    setDirectorRejectModalOpen(false);
+    await submitDirectorReject(directorRejectTargetId, directorRejectReason.trim());
+    setDirectorRejectTargetId(null);
+    setDirectorRejectReason("");
   };
 
   const openRejectModal = (submissionId) => {
@@ -1508,7 +2461,7 @@ function App() {
     setLibraryRejectReason("");
   };
 
-  const buildDirectorArchiveColumns = (loadingId, onArchive) => [
+  const buildDirectorArchiveColumns = (loadingId, onArchive, onReject) => [
     {
       title: "Title",
       dataIndex: "title",
@@ -1520,45 +2473,65 @@ function App() {
       title: "Authors",
       dataIndex: "author",
       key: "author",
-      width: 220,
+      width: 200,
       ellipsis: true
     },
     {
       title: "Status",
       dataIndex: "submission_status",
       key: "submission_status",
-      width: 120,
+      width: 110,
       render: (status) => <Tag color={thesisStatusColor(status)}>{status}</Tag>
+    },
+    {
+      title: "Collection / period",
+      key: "period",
+      width: 180,
+      ellipsis: true,
+      render: (_v, record) =>
+        record.semester_name || record.faculty_name
+          ? `${record.faculty_name || ""} / ${record.semester_name || ""}`.trim()
+          : "—"
     },
     {
       title: "Submitted At",
       dataIndex: "created_at",
       key: "created_at",
-      width: 180,
+      width: 170,
       render: (createdAt) => new Date(createdAt).toLocaleString()
     },
     {
       title: "Actions",
       key: "actions",
-      width: 140,
+      width: 220,
       render: (_value, record) => (
-        <Button type="primary" loading={loadingId === record.id} onClick={() => onArchive(record.id)}>
-          Archive
-        </Button>
+        <Space>
+          <Button type="primary" loading={loadingId === record.id} onClick={() => onArchive(record.id)}>
+            Archive
+          </Button>
+          <Button danger loading={loadingId === record.id} onClick={() => onReject(record.id)}>
+            Reject
+          </Button>
+        </Space>
       )
     }
   ];
 
   const handleLogout = () => {
     setAuth(null);
+    setAdminDashTab("admin");
     setStudentSubmissions([]);
-    setAdminSubmissions([]);
-    setAdminQueue([]);
+    setStaffSubmissions([]);
     setStaffDetailRecord(null);
     setStudentDetailRecord(null);
     setReviewerDetailRecord(null);
     setReviewerQueue([]);
     setReviewerSearch("");
+    setReviewerSemesterFilter(undefined);
+    setReviewerPeriodFilter(undefined);
+    setStaffSearch("");
+    setStaffSemesterFilter(undefined);
+    setStaffPeriodFilter(undefined);
     setEditingSubmissionId(null);
     setEditingSubmissionStatus(null);
     localStorage.removeItem(STORAGE_KEY);
@@ -1573,43 +2546,500 @@ function App() {
     }
 
     return (
-      <Space direction="vertical" size={10} style={{ width: "100%" }}>
-        {history.map((item, idx) => {
-          const payloadSummary = formatEventPayload(item.eventType, item.payload);
-          return (
-            <Card
-              key={`${item.id || idx}-${idx}`}
-              size="small"
-              style={{ borderColor: "#d9e7ff", borderRadius: 10, background: "#fafcff" }}
-              bodyStyle={{ padding: "10px 12px" }}
-            >
-              <Space wrap size={8} style={{ width: "100%", justifyContent: "space-between" }}>
+      <Timeline
+        style={{ marginTop: 12 }}
+        items={history.map((item, idx) => {
+          const detail = formatEventPayload(item.eventType, item.payload);
+          const role = humanWorkflowRole(item.actorRole);
+          const name = item.actorName || (item.actorRole === "system" ? "System" : "Unknown");
+          return {
+            key: `${item.id || idx}-${idx}`,
+            color: timelineColor(item.eventType),
+            children: (
+              <div style={{ paddingBottom: 4 }}>
                 <Space wrap size={8}>
-                  <Tag color={eventColor(item.eventType)}>{eventLabel(item.eventType)}</Tag>
-                  <Text type="secondary">{new Date(item.createdAt).toLocaleString()}</Text>
-                </Space>
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  {item.actorRole || "unknown"}
-                </Text>
-              </Space>
-              <div>
-                <Text strong>{item.actorName || item.actorId || "system"}</Text>
-              </div>
-              {payloadSummary ? (
-                <div style={{ marginTop: 4 }}>
-                  <Text>{payloadSummary}</Text>
-                </div>
-              ) : item.payload ? (
-                <div style={{ marginTop: 4 }}>
+                  <Tag color={eventColor(item.eventType)} style={{ marginInlineEnd: 0 }}>
+                    {eventLabel(item.eventType)}
+                  </Tag>
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    {JSON.stringify(item.payload)}
+                    {item.createdAt ? new Date(item.createdAt).toLocaleString() : ""}
+                  </Text>
+                </Space>
+                <div>
+                  <Text type="secondary" style={{ fontSize: 13 }}>
+                    {role} · {name}
                   </Text>
                 </div>
-              ) : null}
-            </Card>
-          );
+                {detail ? (
+                  <div style={{ marginTop: 2 }}>
+                    <Text>{detail}</Text>
+                  </div>
+                ) : null}
+              </div>
+            )
+          };
         })}
+      />
+    );
+  };
+
+  const renderSearchArchiveFilters = ({ search, onSearch, semester, onSemester, period, onPeriod, items }) => (
+    <>
+      <Input
+        allowClear
+        placeholder="Search by title, author, reviewer list, abstract, submitter..."
+        value={search}
+        onChange={(event) => onSearch(event.target.value)}
+      />
+      <Space wrap>
+        <Select
+          allowClear
+          placeholder="Semester"
+          style={{ minWidth: 200 }}
+          value={semester}
+          options={buildSemesterFilterOptions(items)}
+          onChange={(value) => {
+            onSemester(value);
+            onPeriod((current) => {
+              if (!current || !value) {
+                return current;
+              }
+              const stillValid = (items || []).some(
+                (item) =>
+                  submissionPeriodId(item) === current && submissionSemesterKey(item) === value
+              );
+              return stillValid ? current : undefined;
+            });
+          }}
+        />
+        <Select
+          allowClear
+          placeholder="Submission period"
+          style={{ minWidth: 260 }}
+          value={period}
+          options={buildPeriodFilterOptions(items, semester)}
+          onChange={onPeriod}
+        />
       </Space>
+    </>
+  );
+
+  const renderSubmissionDetailBody = (record) => {
+    if (!record) {
+      return null;
+    }
+    const extra = record.extra_metadata && typeof record.extra_metadata === "object" ? record.extra_metadata : {};
+    const shownConfigurableKeys = new Set([
+      "dateIssued",
+      "publisher",
+      "documentType",
+      "language",
+      "description",
+      "abstract"
+    ]);
+    const extraFields = (Array.isArray(configurableFormFields) ? configurableFormFields : []).filter(
+      (field) => !shownConfigurableKeys.has(field.fieldKey)
+    );
+    return (
+      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Descriptions bordered size="small" column={1}>
+          <Descriptions.Item label="Email">{record.student_email || "—"}</Descriptions.Item>
+          <Descriptions.Item label="Title (Vietnamese)">{record.title_vi || "—"}</Descriptions.Item>
+          <Descriptions.Item label="Title (English)">
+            {record.title_en || record.title || "—"}
+          </Descriptions.Item>
+          <Descriptions.Item label="Advisor(s)">{record.thesis_advisors || "—"}</Descriptions.Item>
+          <Descriptions.Item label="Major">{record.major || "—"}</Descriptions.Item>
+          <Descriptions.Item label="Year">{record.thesis_year || "—"}</Descriptions.Item>
+          <Descriptions.Item label="Date of Issue">
+            {record.date_issued || record.thesis_year || "—"}
+          </Descriptions.Item>
+          <Descriptions.Item label="Publisher">
+            {record.publisher || record.university_name || "—"}
+          </Descriptions.Item>
+          <Descriptions.Item label="Type">{record.document_type || "—"}</Descriptions.Item>
+          <Descriptions.Item label="Language">{record.language || "—"}</Descriptions.Item>
+          <Descriptions.Item label="Submitter account">
+            {record.submitter || "—"}
+            {record.submitter_username ? (
+              <Text type="secondary"> (@{record.submitter_username})</Text>
+            ) : null}
+          </Descriptions.Item>
+          <Descriptions.Item label="Submitter user ID">
+            <Text code copyable>
+              {record.submitter_id}
+            </Text>
+          </Descriptions.Item>
+          <Descriptions.Item label="Workflow status">
+            <Tag color={thesisStatusColor(record.status)}>{record.status}</Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label="Created at">
+            {new Date(record.created_at).toLocaleString()}
+          </Descriptions.Item>
+          <Descriptions.Item label="Authors (resolved)">{record.author || "—"}</Descriptions.Item>
+          <Descriptions.Item label="Reviewers (resolved)">{record.reviewer || "—"}</Descriptions.Item>
+          <Descriptions.Item label="University">{record.university_name || "—"}</Descriptions.Item>
+          <Descriptions.Item label="Faculty">{record.faculty_name || "—"}</Descriptions.Item>
+          <Descriptions.Item label="Semester">{record.semester_name || "—"}</Descriptions.Item>
+          <Descriptions.Item label="Abstract">{record.abstract || "—"}</Descriptions.Item>
+          <Descriptions.Item label="Description">{record.description || "—"}</Descriptions.Item>
+          {extraFields.map((field) => (
+            <Descriptions.Item key={field.id || field.fieldKey} label={field.label}>
+              {String(extra[field.fieldKey] ?? record[field.fieldKey] ?? "").trim() || "—"}
+            </Descriptions.Item>
+          ))}
+        </Descriptions>
+        <div>
+          <Title level={5}>Files</Title>
+          {Array.isArray(record.files) && record.files.length > 0 ? (
+            <ul style={{ margin: 0, paddingLeft: 20 }}>
+              {record.files.map((f) => (
+                <li key={f.id}>
+                  <Space wrap align="start">
+                    <Text strong style={{ wordBreak: "break-word", overflowWrap: "anywhere" }}>
+                      {f.fileName}
+                    </Text>
+                    <Tag>{f.fileType}</Tag>
+                    <Button
+                      type="primary"
+                      size="small"
+                      loading={fileOpenLoadingKey === `${record.id}:${f.id}`}
+                      onClick={() => void openProtectedSubmissionFile(record.id, f.id)}
+                    >
+                      Open
+                    </Button>
+                  </Space>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <Text type="secondary">No files</Text>
+          )}
+        </div>
+        <div>
+          <Title level={5}>Workflow History</Title>
+          {renderWorkflowHistory(record.workflow_history)}
+        </div>
+      </Space>
+    );
+  };
+
+  const renderThesisEntryWorkspace = () => {
+    const studentFocusRecord = studentPrimarySubmitted || studentOwnDraft;
+    const showStudentRecordDetail = !isAdminActor && Boolean(studentFocusRecord) && !editingSubmissionId;
+    const focusCaps = studentFocusRecord
+      ? getStudentSubmissionCapabilities(studentFocusRecord, actingStudentId, studentSubmissions)
+      : null;
+
+    return (
+                <>
+                  {showStudentRecordDetail ? (
+                    <>
+                      <Space wrap style={{ width: "100%", justifyContent: "space-between", marginBottom: 12 }}>
+                        <Title level={5} style={{ margin: 0 }}>
+                          {studentFocusRecord.status === "draft" ? "Draft details" : "Submission details"}
+                        </Title>
+                        {focusCaps?.canEdit ? (
+                          <Button type="primary" onClick={() => void loadSubmissionIntoForm(studentFocusRecord)}>
+                            Edit
+                          </Button>
+                        ) : null}
+                      </Space>
+                      {renderSubmissionDetailBody(studentFocusRecord)}
+                    </>
+                  ) : (
+                    <>
+                  {isAdminActor ? (
+                    <Paragraph type="secondary">
+                      Create a draft or submit a thesis on behalf of a student. The selected student remains the
+                      submitter.
+                    </Paragraph>
+                  ) : null}
+                  <Form layout="vertical" form={submissionForm} autoComplete="off">
+                    {isAdminActor ? (
+                      <Form.Item name="studentId" hidden>
+                        <Input />
+                      </Form.Item>
+                    ) : null}
+                    <Form.Item
+                      label="Faculty"
+                      name="archiveFacultyId"
+                      extra="Taken from the student's faculty"
+                      rules={[{ required: true, message: "This student is not assigned to a faculty" }]}
+                    >
+                      <Select
+                        placeholder="Student faculty"
+                        loading={isLoadingArchiveFaculties}
+                        options={facultySelectOptions}
+                        disabled
+                        notFoundContent={
+                          isLoadingArchiveFaculties ? "Loading..." : "No faculty assigned"
+                        }
+                      />
+                    </Form.Item>
+                    <Form.Item
+                      label="Semester"
+                      name="archiveSemesterId"
+                      rules={[{ required: true, message: "Please select a semester" }]}
+                    >
+                      <Select
+                        showSearch
+                        allowClear
+                        placeholder="Select semester"
+                        optionFilterProp="label"
+                        loading={isLoadingArchiveSemesters}
+                        options={archiveSemesters}
+                        disabled={!archiveFacultyId || !canChangeSubmissionPeriod}
+                        onChange={(value) => void handleArchiveSemesterChange(value)}
+                        notFoundContent={isLoadingArchiveSemesters ? "Loading..." : "Select a faculty first"}
+                      />
+                    </Form.Item>
+                    <Form.Item
+                      label="Submission period"
+                      name="submissionPeriodId"
+                      rules={[{ required: true, message: "Please select a submission period" }]}
+                    >
+                      <Select
+                        showSearch
+                        allowClear
+                        placeholder="Select open submission period"
+                        optionFilterProp="label"
+                        loading={isLoadingArchivePeriods}
+                        disabled={!archiveSemesterId || !canChangeSubmissionPeriod}
+                        onChange={handleSubmissionPeriodChange}
+                        options={archivePeriods.map((p) => ({
+                          value: p.id,
+                          label: `${p.name} (closes ${new Date(p.closesAt).toLocaleDateString()})`
+                        }))}
+                        notFoundContent={
+                          isLoadingArchivePeriods ? "Loading..." : "No open periods for this semester"
+                        }
+                      />
+                    </Form.Item>
+
+                    <Divider style={{ margin: "8px 0" }} />
+                    {isAdminActor ? (
+                    <Form.Item
+                      label="Authors"
+                      name="authorIds"
+                      extra="Search by student name or username. Not filled with the admin account."
+                      rules={[{ required: true, message: "Please search and select at least one student author" }]}
+                    >
+                      <Select
+                        mode="multiple"
+                        showSearch
+                        allowClear
+                        disabled={isFormReadOnly}
+                        placeholder="Search and select student authors"
+                        optionFilterProp="label"
+                        loading={isLoadingStudents}
+                        options={studentOptions}
+                        maxTagCount="responsive"
+                        onChange={handleAdminAuthorsChange}
+                        notFoundContent={isLoadingStudents ? "Loading..." : "No students found"}
+                      />
+                    </Form.Item>
+                    ) : null}
+                    <fieldset
+                      disabled={isFormReadOnly || (!periodSelected && !editingSubmissionId)}
+                      style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}
+                    >
+                    <Form.Item label="Email" name="email">
+                      <Input disabled placeholder="username@hcmut.edu.vn" />
+                    </Form.Item>
+                    <Form.Item
+                      label="Thesis title (Vietnamese)"
+                      name="titleVi"
+                      rules={[{ required: true, message: "Vietnamese title is required" }]}
+                    >
+                      <Input placeholder="Tên luận văn / luận án (tiếng Việt)" />
+                    </Form.Item>
+                    <Form.Item
+                      label="Thesis title (English)"
+                      name="titleEn"
+                      rules={[{ required: true, message: "English title is required" }]}
+                    >
+                      <Input placeholder="Thesis title in English" />
+                    </Form.Item>
+                    <Form.Item
+                      label="Advisor(s)"
+                      name="thesisAdvisors"
+                      rules={[{ required: true, message: "Advisor(s) is required" }]}
+                    >
+                      <Input placeholder="e.g. Assoc. Prof. Nguyen Van A; Dr. Tran Van B" />
+                    </Form.Item>
+                    <Form.Item label="Major" name="major" rules={[{ required: true, message: "Major is required" }]}>
+                      <Input placeholder="e.g. Computer Science" />
+                    </Form.Item>
+                    <Form.Item label="Year" name="thesisYear" rules={[{ required: true, message: "Year is required" }]}>
+                      <Select
+                        options={THESIS_YEAR_OPTIONS}
+                        placeholder="Graduation / submission year"
+                        onChange={(year) => {
+                          const current = submissionForm.getFieldValue("dateIssued");
+                          if (!current || /^\d{4}$/.test(String(current))) {
+                            submissionForm.setFieldsValue({ dateIssued: year });
+                          }
+                        }}
+                      />
+                    </Form.Item>
+                    {!isAdminActor ? (
+                    <Form.Item
+                      label="Authors"
+                      name="authorIds"
+                      rules={[{ required: true, message: "Please select at least one author" }]}
+                    >
+                      <Select
+                        mode="multiple"
+                        showSearch
+                        allowClear
+                        placeholder="Search and select authors (student accounts)"
+                        optionFilterProp="label"
+                        loading={isLoadingStudents}
+                        options={studentOptions}
+                        maxTagCount="responsive"
+                        notFoundContent={isLoadingStudents ? "Loading..." : "No students found"}
+                      />
+                    </Form.Item>
+                    ) : null}
+                    <Form.Item
+                      label="Reviewers"
+                      name="reviewerIds"
+                      rules={[{ required: true, message: "Please select at least one reviewer" }]}
+                    >
+                      <Select
+                        mode="multiple"
+                        showSearch
+                        allowClear
+                        placeholder="Search and select reviewers"
+                        optionFilterProp="label"
+                        loading={isLoadingReviewers}
+                        options={reviewerOptions}
+                        maxTagCount="responsive"
+                        notFoundContent={isLoadingReviewers ? "Loading..." : "No reviewers found"}
+                      />
+                    </Form.Item>
+                    {configurableFormFields.map((field) => {
+                      const rules = field.required
+                        ? [{ required: true, message: `${field.label} is required` }]
+                        : [];
+                      let control;
+                      if (field.inputType === "textarea") {
+                        control = <TextArea rows={field.fieldKey === "abstract" ? 5 : 3} />;
+                      } else if (field.inputType === "select" || field.inputType === "year") {
+                        control = (
+                          <Select
+                            options={
+                              field.inputType === "year"
+                                ? THESIS_YEAR_OPTIONS
+                                : (field.options || []).map((o) => ({
+                                    value: o.value,
+                                    label: o.label
+                                  }))
+                            }
+                            placeholder={field.label}
+                          />
+                        );
+                      } else {
+                        control = <Input placeholder={field.defaultValue || field.label} />;
+                      }
+                      return (
+                        <Form.Item
+                          key={field.id || field.fieldKey}
+                          label={field.label}
+                          name={field.fieldKey}
+                          rules={rules}
+                          extra={field.dspacePath ? `DSpace: ${field.dspacePath}` : undefined}
+                        >
+                          {control}
+                        </Form.Item>
+                      );
+                    })}
+                    <Form.Item
+                      label="Thesis PDF"
+                      name="thesisFile"
+                      valuePropName="fileList"
+                      getValueFromEvent={(event) => event?.fileList || []}
+                      rules={[
+                        {
+                          required: !editingSubmissionId,
+                          message: "Please upload thesis PDF"
+                        }
+                      ]}
+                      extra={
+                        editingSubmissionId
+                          ? "Current PDF is shown below. Upload a new file only if you want to replace it."
+                          : undefined
+                      }
+                    >
+                      <Upload.Dragger
+                        accept=".pdf,application/pdf"
+                        beforeUpload={(file) => (validateThesisPdf(file) ? false : Upload.LIST_IGNORE)}
+                        maxCount={1}
+                        onPreview={(file) => {
+                          if (file?.existingFileId && editingSubmissionId) {
+                            void openProtectedSubmissionFile(editingSubmissionId, file.existingFileId);
+                          }
+                        }}
+                      >
+                        <p className="ant-upload-drag-icon">
+                          <InboxOutlined />
+                        </p>
+                        <p className="ant-upload-text">Click or drag PDF thesis file here (max {THESIS_MAX_FILE_SIZE_MB} MB)</p>
+                      </Upload.Dragger>
+                    </Form.Item>
+
+                    <Space wrap>
+                      {!isFormReadOnly ? (
+                        <>
+                          <Button
+                            onClick={() => void handleSaveDraft(submissionForm.getFieldsValue())}
+                            loading={isSavingDraft}
+                            disabled={
+                              (!periodSelected && !editingSubmissionId) || !canSaveCurrentDraft || isFormReadOnly
+                            }
+                          >
+                            Save draft
+                          </Button>
+                          <Button
+                            type="primary"
+                            onClick={() => submissionForm.validateFields().then(handleSubmitThesis).catch(() => {})}
+                            loading={isSubmittingSubmission}
+                            disabled={(!periodSelected && !editingSubmissionId) || !canSubmitCurrentThesis}
+                          >
+                            {editingSubmissionStatus === "rejected" ||
+                            editingSubmissionStatus === "reject" ||
+                            editingSubmissionStatus === "approved"
+                              ? "Submit again"
+                              : "Submit thesis"}
+                          </Button>
+                          {editingSubmissionId && editingSubmissionCapabilities.canRevertToDraft ? (
+                            <Button loading={isRevertingSubmission} onClick={() => void handleRevertToDraft()}>
+                              Revert to draft
+                            </Button>
+                          ) : null}
+                          {editingSubmissionId && editingSubmissionCapabilities.canDelete ? (
+                            <Button
+                              danger
+                              loading={isDeletingSubmission}
+                              onClick={() =>
+                                editingSubmissionRecord && promptDeleteSubmission(editingSubmissionRecord)
+                              }
+                            >
+                              Delete
+                            </Button>
+                          ) : null}
+                        </>
+                      ) : null}
+                      {editingSubmissionId ? (
+                        <Button onClick={resetSubmissionForm}>{isFormReadOnly ? "Close" : "Cancel edit"}</Button>
+                      ) : null}
+                    </Space>
+                    </fieldset>
+                  </Form>
+                    </>
+                  )}
+                </>
     );
   };
 
@@ -1658,34 +3088,58 @@ function App() {
             style={{ maxWidth: 560, borderColor: "#d6eaff", boxShadow: "0 6px 18px rgba(3, 3, 145, 0.08)" }}
           >
             <Space direction="vertical" style={{ width: "100%" }} size="middle">
-              <Alert
-                type="info"
-                showIcon
-                message="Demo credentials"
-                description="student1/student123, reviewer1/review123, library1/library123, director1/director123, admin1/admin123"
-              />
-              <Form form={loginForm} layout="vertical" onFinish={handleLogin} autoComplete="off">
-                <Form.Item
-                  label="Username"
-                  name="username"
-                  rules={[{ required: true, message: "Please enter your username" }]}
-                >
-                  <Input placeholder="student1" />
-                </Form.Item>
-                <Form.Item
-                  label="Password"
-                  name="password"
-                  rules={[
-                    { required: true, message: "Please enter your password" },
-                    { min: 6, message: "Password must be at least 6 characters" }
-                  ]}
-                >
-                  <Input.Password placeholder="******" />
-                </Form.Item>
-                <Button type="primary" htmlType="submit" loading={isLoggingIn}>
-                  Login
-                </Button>
-              </Form>
+              {loginMethod === "google" ? (
+                <>
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="HCMUT Google sign-in"
+                    description="Sign in with your verified @hcmut.edu.vn Google account."
+                  />
+                  <Button
+                    type="primary"
+                    size="large"
+                    block
+                    loading={isLoggingIn}
+                    onClick={() => {
+                      window.location.href = "/api/auth/google";
+                    }}
+                  >
+                    Login with Google
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="Demo credentials"
+                    description="student1/student123, reviewer1/review123, library1/library123, director1/director123, admin1/admin123"
+                  />
+                  <Form form={loginForm} layout="vertical" onFinish={handleLogin} autoComplete="off">
+                    <Form.Item
+                      label="Username"
+                      name="username"
+                      rules={[{ required: true, message: "Please enter your username" }]}
+                    >
+                      <Input placeholder="student1" />
+                    </Form.Item>
+                    <Form.Item
+                      label="Password"
+                      name="password"
+                      rules={[
+                        { required: true, message: "Please enter your password" },
+                        { min: 6, message: "Password must be at least 6 characters" }
+                      ]}
+                    >
+                      <Input.Password placeholder="******" />
+                    </Form.Item>
+                    <Button type="primary" htmlType="submit" loading={isLoggingIn}>
+                      Login
+                    </Button>
+                  </Form>
+                </>
+              )}
             </Space>
           </Card>
         ) : (
@@ -1703,303 +3157,7 @@ function App() {
                 Your role: <Tag color={getRoleColor(auth.user.role)}>{roleLabel(auth.user.role)}</Tag>
               </Text>
               {auth.user.role === "student" ? (
-                <>
-                  <Paragraph type="secondary">
-                    You may save multiple drafts, but only one thesis can be in review at a time. While reviewers are
-                    still pending, you may edit, delete, or revert the thesis to draft. After a reviewer or library staff
-                    acts, edit and submit again from your submission record.
-                  </Paragraph>
-                  {studentActiveSubmission && !canSubmitCurrentThesis && !editingSubmissionId ? (
-                    <Alert
-                      type="warning"
-                      showIcon
-                      style={{ marginBottom: 12 }}
-                      message="You already have a submitted thesis"
-                      description="You can keep saving drafts. To send a thesis for review again, use Edit on your submission below."
-                    />
-                  ) : null}
-                  {editingSubmissionId ? (
-                    <Alert
-                      type="info"
-                      showIcon
-                      style={{ marginBottom: 12 }}
-                      message={
-                        editingSubmissionStatus === "rejected" || editingSubmissionStatus === "reject"
-                          ? "Editing rejected thesis"
-                          : editingSubmissionStatus === "approved"
-                            ? "Editing approved thesis"
-                            : editingSubmissionStatus === "reviewing"
-                              ? "Editing thesis under review"
-                              : "Editing draft"
-                      }
-                      description={
-                        editingSubmissionStatus === "rejected" ||
-                        editingSubmissionStatus === "reject" ||
-                        editingSubmissionStatus === "approved"
-                          ? "Update your thesis and submit again for review."
-                          : editingSubmissionStatus === "reviewing"
-                            ? "Save changes while no reviewer has approved or rejected yet. You may also revert to draft or delete."
-                            : "Save your draft or submit when ready."
-                      }
-                      action={
-                        <Button size="small" onClick={resetSubmissionForm}>
-                          Cancel edit
-                        </Button>
-                      }
-                    />
-                  ) : null}
-                  <Divider style={{ margin: "8px 0" }} />
-                  <Title level={5} style={{ margin: "0 0 8px" }}>
-                    Step 1 — Submission period
-                  </Title>
-                  <Form layout="vertical" form={submissionForm} autoComplete="off">
-                    <Form.Item
-                      label="Faculty"
-                      name="archiveFacultyId"
-                      rules={[{ required: true, message: "Please select a faculty" }]}
-                    >
-                      <Select
-                        showSearch
-                        allowClear
-                        placeholder="Select faculty"
-                        optionFilterProp="label"
-                        loading={isLoadingArchiveFaculties}
-                        options={archiveFaculties}
-                        disabled={Boolean(editingSubmissionId)}
-                        onChange={(value) => void handleArchiveFacultyChange(value)}
-                        notFoundContent={
-                          isLoadingArchiveFaculties ? "Loading..." : "No faculties with open submission periods"
-                        }
-                      />
-                    </Form.Item>
-                    <Form.Item
-                      label="Semester"
-                      name="archiveSemesterId"
-                      rules={[{ required: true, message: "Please select a semester" }]}
-                    >
-                      <Select
-                        showSearch
-                        allowClear
-                        placeholder="Select semester"
-                        optionFilterProp="label"
-                        loading={isLoadingArchiveSemesters}
-                        options={archiveSemesters}
-                        disabled={!archiveFacultyId || Boolean(editingSubmissionId)}
-                        onChange={(value) => void handleArchiveSemesterChange(value)}
-                        notFoundContent={isLoadingArchiveSemesters ? "Loading..." : "Select a faculty first"}
-                      />
-                    </Form.Item>
-                    <Form.Item
-                      label="Submission period"
-                      name="submissionPeriodId"
-                      rules={[{ required: true, message: "Please select a submission period" }]}
-                    >
-                      <Select
-                        showSearch
-                        allowClear
-                        placeholder="Select open submission period"
-                        optionFilterProp="label"
-                        loading={isLoadingArchivePeriods}
-                        disabled={!archiveSemesterId || Boolean(editingSubmissionId)}
-                        onChange={handleSubmissionPeriodChange}
-                        options={archivePeriods.map((p) => ({
-                          value: p.id,
-                          label: `${p.name} (closes ${new Date(p.closesAt).toLocaleDateString()})`
-                        }))}
-                        notFoundContent={
-                          isLoadingArchivePeriods ? "Loading..." : "No open periods for this semester"
-                        }
-                      />
-                    </Form.Item>
-
-                    <Divider style={{ margin: "8px 0" }} />
-                    <Title level={5} style={{ margin: "0 0 8px" }}>
-                      Step 2 — Thesis details
-                    </Title>
-                    {!periodSelected ? (
-                      <Alert
-                        type="info"
-                        showIcon
-                        message="Complete Step 1"
-                        description="Select faculty, semester, and submission period before entering thesis details."
-                        style={{ marginBottom: 16 }}
-                      />
-                    ) : null}
-                    <fieldset disabled={!periodSelected} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
-                    <Form.Item label="Email" name="email">
-                      <Input disabled placeholder="username@hcmut.edu.vn" />
-                    </Form.Item>
-                    <Form.Item
-                      label="Thesis title (Vietnamese)"
-                      name="titleVi"
-                      rules={[{ required: true, message: "Vietnamese title is required" }]}
-                    >
-                      <Input placeholder="Tên luận văn / luận án (tiếng Việt)" />
-                    </Form.Item>
-                    <Form.Item
-                      label="Thesis title (English)"
-                      name="titleEn"
-                      rules={[{ required: true, message: "English title is required" }]}
-                    >
-                      <Input placeholder="Thesis title in English" />
-                    </Form.Item>
-                    <Form.Item
-                      label="Advisor(s)"
-                      name="thesisAdvisors"
-                      rules={[{ required: true, message: "Advisor(s) is required" }]}
-                    >
-                      <Input placeholder="e.g. Assoc. Prof. Nguyen Van A; Dr. Tran Van B" />
-                    </Form.Item>
-                    <Form.Item label="Major" name="major" rules={[{ required: true, message: "Major is required" }]}>
-                      <Input placeholder="e.g. Computer Science" />
-                    </Form.Item>
-                    <Form.Item label="Year" name="thesisYear" rules={[{ required: true, message: "Year is required" }]}>
-                      <Select options={THESIS_YEAR_OPTIONS} placeholder="Graduation / submission year" />
-                    </Form.Item>
-                    <Form.Item
-                      label="Authors"
-                      name="authorIds"
-                      rules={[{ required: true, message: "Please select at least one author" }]}
-                    >
-                      <Select
-                        mode="multiple"
-                        showSearch
-                        allowClear
-                        placeholder="Search and select authors (student accounts)"
-                        optionFilterProp="label"
-                        loading={isLoadingStudents}
-                        options={studentOptions}
-                        maxTagCount="responsive"
-                        notFoundContent={isLoadingStudents ? "Loading..." : "No students found"}
-                      />
-                    </Form.Item>
-                    <Form.Item
-                      label="Reviewers"
-                      name="reviewerIds"
-                      rules={[{ required: true, message: "Please select at least one reviewer" }]}
-                    >
-                      <Select
-                        mode="multiple"
-                        showSearch
-                        allowClear
-                        placeholder="Search and select reviewers"
-                        optionFilterProp="label"
-                        loading={isLoadingReviewers}
-                        options={reviewerOptions}
-                        maxTagCount="responsive"
-                        notFoundContent={isLoadingReviewers ? "Loading..." : "No reviewers found"}
-                      />
-                    </Form.Item>
-                    <Form.Item
-                      label="Abstract"
-                      name="abstract"
-                      rules={[{ required: true, message: "Abstract is required" }]}
-                    >
-                      <TextArea rows={5} placeholder="Summary of your thesis" />
-                    </Form.Item>
-                    <Form.Item
-                      label="Thesis PDF"
-                      name="thesisFile"
-                      valuePropName="fileList"
-                      getValueFromEvent={(event) => event?.fileList || []}
-                      rules={[
-                        {
-                          required: !editingSubmissionId,
-                          message: "Please upload thesis PDF"
-                        }
-                      ]}
-                      extra={
-                        editingSubmissionId
-                          ? "Leave empty to keep the current PDF on file"
-                          : undefined
-                      }
-                    >
-                      <Upload.Dragger
-                        beforeUpload={(file) => (validateThesisPdf(file) ? false : Upload.LIST_IGNORE)}
-                        maxCount={1}
-                      >
-                        <p className="ant-upload-drag-icon">
-                          <InboxOutlined />
-                        </p>
-                        <p className="ant-upload-text">Click or drag PDF thesis file here (max {THESIS_MAX_FILE_SIZE_MB} MB)</p>
-                      </Upload.Dragger>
-                    </Form.Item>
-
-                    <Space wrap>
-                      <Button
-                        onClick={() => void handleSaveDraft(submissionForm.getFieldsValue())}
-                        loading={isSavingDraft}
-                        disabled={!periodSelected && !editingSubmissionId}
-                      >
-                        Save draft
-                      </Button>
-                      <Button
-                        type="primary"
-                        onClick={() => submissionForm.validateFields().then(handleSubmitThesis).catch(() => {})}
-                        loading={isSubmittingSubmission}
-                        disabled={(!periodSelected && !editingSubmissionId) || !canSubmitCurrentThesis}
-                      >
-                        {editingSubmissionStatus === "rejected" ||
-                        editingSubmissionStatus === "reject" ||
-                        editingSubmissionStatus === "approved"
-                          ? "Submit again"
-                          : "Submit thesis"}
-                      </Button>
-                      {editingSubmissionId && editingSubmissionCapabilities.canRevertToDraft ? (
-                        <Button loading={isRevertingSubmission} onClick={() => void handleRevertToDraft()}>
-                          Revert to draft
-                        </Button>
-                      ) : null}
-                      {editingSubmissionId && editingSubmissionCapabilities.canDelete ? (
-                        <Button
-                          danger
-                          loading={isDeletingSubmission}
-                          onClick={() => editingSubmissionRecord && promptDeleteSubmission(editingSubmissionRecord)}
-                        >
-                          Delete
-                        </Button>
-                      ) : null}
-                      {editingSubmissionId ? (
-                        <Button onClick={resetSubmissionForm}>Cancel edit</Button>
-                      ) : (
-                        <Button onClick={resetSubmissionForm}>New draft</Button>
-                      )}
-                    </Space>
-                    </fieldset>
-                  </Form>
-
-                  <Divider style={{ margin: "8px 0" }} />
-                  <Space style={{ width: "100%", justifyContent: "space-between" }}>
-                    <Title level={5} style={{ margin: 0 }}>
-                      My submission
-                    </Title>
-                    <Button onClick={() => loadStudentSubmissions(auth.user.id)} loading={isLoadingSubmissions}>
-                      Refresh
-                    </Button>
-                  </Space>
-                  <Table
-                    rowKey="id"
-                    dataSource={studentActiveSubmission ? [studentActiveSubmission] : []}
-                    columns={submissionColumns}
-                    loading={isLoadingSubmissions}
-                    pagination={false}
-                    locale={{ emptyText: "No submitted thesis yet" }}
-                    scroll={{ x: 1200 }}
-                  />
-                  <Divider style={{ margin: "8px 0" }} />
-                  <Title level={5} style={{ margin: "0 0 8px" }}>
-                    Drafts ({studentDraftSubmissions.length})
-                  </Title>
-                  <Table
-                    rowKey="id"
-                    dataSource={studentDraftSubmissions}
-                    columns={draftColumns}
-                    loading={isLoadingSubmissions}
-                    pagination={{ pageSize: 5 }}
-                    locale={{ emptyText: "No drafts saved" }}
-                    scroll={{ x: 1000 }}
-                  />
-                </>
+                renderThesisEntryWorkspace()
               ) : auth.user.role === "reviewer" ? (
                 <>
                   <Paragraph type="secondary">
@@ -2014,12 +3172,15 @@ function App() {
                       Refresh
                     </Button>
                   </Space>
-                  <Input
-                    allowClear
-                    placeholder="Search by title, author, reviewer list, abstract, submitter..."
-                    value={reviewerSearch}
-                    onChange={(event) => setReviewerSearch(event.target.value)}
-                  />
+                  {renderSearchArchiveFilters({
+                    search: reviewerSearch,
+                    onSearch: setReviewerSearch,
+                    semester: reviewerSemesterFilter,
+                    onSemester: setReviewerSemesterFilter,
+                    period: reviewerPeriodFilter,
+                    onPeriod: setReviewerPeriodFilter,
+                    items: reviewerQueue
+                  })}
                   <Title level={5} style={{ margin: "8px 0 0" }}>
                     Need My Review ({reviewerNeedMyDecision.length})
                   </Title>
@@ -2055,7 +3216,89 @@ function App() {
                   />
                 </>
               ) : auth.user.role === "admin" ? (
-                <AdminPanel auth={auth} />
+                <Tabs
+                  activeKey={adminDashTab}
+                  onChange={setAdminDashTab}
+                  items={[
+                    {
+                      key: "admin",
+                      label: "Administration",
+                      children: <AdminPanel auth={auth} hideArchiveTab hideFormFieldsTab />
+                    },
+                    {
+                      key: "submissions",
+                      label: "Submissions",
+                      children: (
+                        <Tabs
+                          items={[
+                            {
+                              key: "list",
+                              label: "All submissions",
+                              children: (
+                        <>
+                          <Paragraph type="secondary">
+                            Open <Text strong>Full detail</Text> to view or delete any submission, including archived
+                            items linked to DSpace.
+                          </Paragraph>
+                          <Space style={{ width: "100%", justifyContent: "space-between", marginBottom: 8 }}>
+                            <Title level={5} style={{ margin: 0 }}>
+                              All submissions
+                            </Title>
+                            <Space>
+                              <Button type="primary" onClick={openAdminCreateSubmission}>
+                                Create submission
+                              </Button>
+                              <Button onClick={() => void loadStaffSubmissions()} loading={isLoadingSubmissions}>
+                                Refresh
+                              </Button>
+                            </Space>
+                          </Space>
+                          {renderSearchArchiveFilters({
+                            search: staffSearch,
+                            onSearch: setStaffSearch,
+                            semester: staffSemesterFilter,
+                            onSemester: setStaffSemesterFilter,
+                            period: staffPeriodFilter,
+                            onPeriod: setStaffPeriodFilter,
+                            items: staffSubmissions
+                          })}
+                          <Table
+                            rowKey="id"
+                            dataSource={staffFilteredSubmissions}
+                            columns={adminSubmissionColumns}
+                            loading={isLoadingSubmissions}
+                            pagination={{ pageSize: 8 }}
+                            scroll={{ x: 1400 }}
+                          />
+                          <Modal
+                            title={editingSubmissionId ? "Edit submission" : "Create submission"}
+                            open={adminSubmissionModalOpen}
+                            onCancel={resetSubmissionForm}
+                            footer={null}
+                            width={880}
+                            destroyOnClose
+                          >
+                            {renderThesisEntryWorkspace()}
+                          </Modal>
+                        </>
+                              )
+                            },
+                            {
+                              key: "form-fields",
+                              label: "Submission fields",
+                              children: <AdminPanel auth={auth} formFieldsOnly />
+                            }
+                          ]}
+                        />
+                      )
+                    },
+                    {
+                      key: "archive",
+                      label: "Archive configuration",
+                      children: <LibraryArchivePanel auth={auth} readOnly={false} canManage />
+                    }
+                  ]}
+                />
               ) : auth.user.role === "library_staff" || auth.user.role === "director" ? (
                 <Tabs
                   defaultActiveKey="workflow"
@@ -2069,6 +3312,15 @@ function App() {
                     Workflow: <Tag color="gold">reviewing</Tag> → <Tag color="green">approved</Tag> →{" "}
                     <Tag color="purple">archived</Tag> or <Tag color="red">rejected</Tag>.
                   </Paragraph>
+                  {renderSearchArchiveFilters({
+                    search: staffSearch,
+                    onSearch: setStaffSearch,
+                    semester: staffSemesterFilter,
+                    onSemester: setStaffSemesterFilter,
+                    period: staffPeriodFilter,
+                    onPeriod: setStaffPeriodFilter,
+                    items: staffFilterSource
+                  })}
                   {auth.user.role === "library_staff" && (
                     <>
                       <Divider style={{ margin: "8px 0" }} />
@@ -2082,7 +3334,7 @@ function App() {
                       </Space>
                       <Table
                         rowKey="id"
-                        dataSource={libraryQueue}
+                        dataSource={libraryFilteredQueue}
                         columns={buildStageQueueColumns(
                           libraryActionLoadingId,
                           (id) => submitLibraryAction(id, "approve"),
@@ -2099,18 +3351,26 @@ function App() {
                     <>
                       <Divider style={{ margin: "8px 0" }} />
                       <Space style={{ width: "100%", justifyContent: "space-between" }}>
-                        <Title level={5} style={{ margin: 0 }}>
-                          Archive approved submissions
-                        </Title>
+                        <div>
+                          <Title level={5} style={{ margin: 0 }}>
+                            Archive approved submissions
+                          </Title>
+                          <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                            Archive commits in Portal then publishes the thesis item (+ PDF when available)
+                            into the DSpace collection of the submission period (fallback: semester collection).
+                          </Paragraph>
+                        </div>
                         <Button onClick={() => loadDirectorQueue()} loading={isLoadingDirectorQueue}>
                           Refresh
                         </Button>
                       </Space>
                       <Table
                         rowKey="id"
-                        dataSource={directorQueue}
-                        columns={buildDirectorArchiveColumns(directorActionLoadingId, (id) =>
-                          submitDirectorArchive(id)
+                        dataSource={directorFilteredQueue}
+                        columns={buildDirectorArchiveColumns(
+                          directorActionLoadingId,
+                          (id) => submitDirectorArchive(id),
+                          (id) => openDirectorRejectModal(id)
                         )}
                         loading={isLoadingDirectorQueue}
                         pagination={{ pageSize: 5 }}
@@ -2142,7 +3402,7 @@ function App() {
                   </Space>
                   <Table
                     rowKey="id"
-                    dataSource={staffSubmissions}
+                    dataSource={staffFilteredSubmissions}
                     columns={adminSubmissionColumns}
                     loading={isLoadingSubmissions}
                     pagination={{ pageSize: 8 }}
@@ -2179,85 +3439,66 @@ function App() {
         }
         open={Boolean(studentDetailRecord)}
         onCancel={() => setStudentDetailRecord(null)}
-        footer={[
-          <Button key="close" type="primary" onClick={() => setStudentDetailRecord(null)}>
-            Close
-          </Button>
-        ]}
+        footer={
+          studentDetailRecord
+            ? (() => {
+                const caps = getStudentSubmissionCapabilities(
+                  studentDetailRecord,
+                  auth?.user?.id,
+                  studentSubmissions
+                );
+                const actions = [];
+                if (caps.canEdit) {
+                  actions.push(
+                    <Button
+                      key="edit"
+                      onClick={() => {
+                        const record = studentDetailRecord;
+                        setStudentDetailRecord(null);
+                        void loadSubmissionIntoForm(record);
+                      }}
+                    >
+                      Edit
+                    </Button>
+                  );
+                }
+                if (caps.canSubmit && studentDetailRecord.status === "draft") {
+                  actions.push(
+                    <Button
+                      key="submit"
+                      type="primary"
+                      loading={isSubmittingSubmission}
+                      onClick={() => void handleSubmitDraftFromDetail(studentDetailRecord)}
+                    >
+                      Submit
+                    </Button>
+                  );
+                }
+                if (caps.canDelete) {
+                  actions.push(
+                    <Button
+                      key="delete"
+                      danger
+                      loading={isDeletingSubmission}
+                      onClick={() => promptDeleteSubmission(studentDetailRecord)}
+                    >
+                      Delete
+                    </Button>
+                  );
+                }
+                actions.push(
+                  <Button key="close" onClick={() => setStudentDetailRecord(null)}>
+                    Close
+                  </Button>
+                );
+                return actions;
+              })()
+            : null
+        }
         width={820}
         destroyOnClose
       >
-        {studentDetailRecord ? (
-          <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-            <Descriptions bordered size="small" column={1}>
-              <Descriptions.Item label="Email">{studentDetailRecord.student_email || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Title (Vietnamese)">{studentDetailRecord.title_vi || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Title (English)">
-                {studentDetailRecord.title_en || studentDetailRecord.title || "—"}
-              </Descriptions.Item>
-              <Descriptions.Item label="Advisor(s)">{studentDetailRecord.thesis_advisors || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Major">{studentDetailRecord.major || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Year">{studentDetailRecord.thesis_year || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Submitter account">
-                {studentDetailRecord.submitter || "—"}
-                {studentDetailRecord.submitter_username ? (
-                  <Text type="secondary">
-                    {" "}
-                    (@{studentDetailRecord.submitter_username})
-                  </Text>
-                ) : null}
-              </Descriptions.Item>
-              <Descriptions.Item label="Submitter user ID">
-                <Text code copyable>
-                  {studentDetailRecord.submitter_id}
-                </Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="Workflow status">
-                <Tag color={thesisStatusColor(studentDetailRecord.status)}>{studentDetailRecord.status}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="Created at">
-                {new Date(studentDetailRecord.created_at).toLocaleString()}
-              </Descriptions.Item>
-              <Descriptions.Item label="Authors (resolved)">{studentDetailRecord.author || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Reviewers (resolved)">{studentDetailRecord.advisor || "—"}</Descriptions.Item>
-              <Descriptions.Item label="University">{studentDetailRecord.university_name || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Faculty">{studentDetailRecord.faculty_name || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Semester">{studentDetailRecord.semester_name || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Abstract">{studentDetailRecord.abstract || "—"}</Descriptions.Item>
-            </Descriptions>
-            <div>
-              <Title level={5}>Files</Title>
-              {Array.isArray(studentDetailRecord.files) && studentDetailRecord.files.length > 0 ? (
-                <ul style={{ margin: 0, paddingLeft: 20 }}>
-                  {studentDetailRecord.files.map((f) => (
-                    <li key={f.id}>
-                      <Space wrap align="start">
-                        <Text strong style={{ wordBreak: "break-word", overflowWrap: "anywhere" }}>
-                          {f.fileName}
-                        </Text>
-                        <Tag>{f.fileType}</Tag>
-                        <Button
-                          type="primary"
-                          size="small"
-                          loading={fileOpenLoadingKey === `${studentDetailRecord.id}:${f.id}`}
-                          onClick={() => void openProtectedSubmissionFile(studentDetailRecord.id, f.id)}
-                        >
-                          Open
-                        </Button>
-                      </Space>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <Text type="secondary">No files</Text>
-              )}
-            </div>
-            <div>
-              <Title level={5}>Workflow History</Title>
-              {renderWorkflowHistory(studentDetailRecord.workflow_history)}
-            </div>
-          </Space>
-        ) : null}
+        {studentDetailRecord ? renderSubmissionDetailBody(studentDetailRecord) : null}
       </Modal>
       <Modal
         title={reviewerDetailRecord ? `Thesis detail: ${reviewerDetailRecord.title}` : "Thesis detail"}
@@ -2282,6 +3523,14 @@ function App() {
               <Descriptions.Item label="Advisor(s)">{reviewerDetailRecord.thesis_advisors || "—"}</Descriptions.Item>
               <Descriptions.Item label="Major">{reviewerDetailRecord.major || "—"}</Descriptions.Item>
               <Descriptions.Item label="Year">{reviewerDetailRecord.thesis_year || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Date of Issue">
+                {reviewerDetailRecord.date_issued || reviewerDetailRecord.thesis_year || "—"}
+              </Descriptions.Item>
+              <Descriptions.Item label="Publisher">
+                {reviewerDetailRecord.publisher || "—"}
+              </Descriptions.Item>
+              <Descriptions.Item label="Type">{reviewerDetailRecord.document_type || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Language">{reviewerDetailRecord.language || "—"}</Descriptions.Item>
               <Descriptions.Item label="Submitter account">
                 {reviewerDetailRecord.submitter || "—"}
                 {reviewerDetailRecord.submitter_username ? (
@@ -2312,8 +3561,9 @@ function App() {
               </Descriptions.Item>
               <Descriptions.Item label="My comment">{reviewerDetailRecord.my_comment || "—"}</Descriptions.Item>
               <Descriptions.Item label="Authors (resolved)">{reviewerDetailRecord.author || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Reviewers (resolved)">{reviewerDetailRecord.advisor || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Reviewers (resolved)">{reviewerDetailRecord.reviewer || "—"}</Descriptions.Item>
               <Descriptions.Item label="Abstract">{reviewerDetailRecord.abstract || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Description">{reviewerDetailRecord.description || "—"}</Descriptions.Item>
             </Descriptions>
             <div>
               <Title level={5}>Files</Title>
@@ -2349,11 +3599,25 @@ function App() {
         title={staffDetailRecord ? `Thesis: ${staffDetailRecord.title}` : "Thesis detail"}
         open={Boolean(staffDetailRecord)}
         onCancel={() => setStaffDetailRecord(null)}
-        footer={[
-          <Button key="close" type="primary" onClick={() => setStaffDetailRecord(null)}>
-            Close
-          </Button>
-        ]}
+        footer={
+          <Space style={{ width: "100%", justifyContent: "space-between" }}>
+            <div />
+            <Space>
+              {canStaffDeleteSubmission(auth?.user?.role) && staffDetailRecord ? (
+                <Button
+                  danger
+                  loading={isDeletingSubmission}
+                  onClick={() => promptStaffDeleteSubmission(staffDetailRecord)}
+                >
+                  Delete
+                </Button>
+              ) : null}
+              <Button type="primary" onClick={() => setStaffDetailRecord(null)}>
+                Close
+              </Button>
+            </Space>
+          </Space>
+        }
         width={800}
         destroyOnClose
       >
@@ -2373,6 +3637,14 @@ function App() {
               <Descriptions.Item label="Advisor(s)">{staffDetailRecord.thesis_advisors || "—"}</Descriptions.Item>
               <Descriptions.Item label="Major">{staffDetailRecord.major || "—"}</Descriptions.Item>
               <Descriptions.Item label="Year">{staffDetailRecord.thesis_year || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Date of Issue">
+                {staffDetailRecord.date_issued || staffDetailRecord.thesis_year || "—"}
+              </Descriptions.Item>
+              <Descriptions.Item label="Publisher">
+                {staffDetailRecord.publisher || staffDetailRecord.university_name || "—"}
+              </Descriptions.Item>
+              <Descriptions.Item label="Type">{staffDetailRecord.document_type || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Language">{staffDetailRecord.language || "—"}</Descriptions.Item>
               <Descriptions.Item label="Submitter account">
                 {staffDetailRecord.submitter || "—"}
                 {staffDetailRecord.submitter_username ? (
@@ -2411,12 +3683,13 @@ function App() {
               <Descriptions.Item label="Author snapshot (stored)">
                 {staffDetailRecord.author_snapshot || "—"}
               </Descriptions.Item>
-              <Descriptions.Item label="Reviewers (resolved)">{staffDetailRecord.advisor || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Reviewers (resolved)">{staffDetailRecord.reviewer || "—"}</Descriptions.Item>
               <Descriptions.Item label="Reviewer user IDs">{formatUuidList(staffDetailRecord.reviewer_user_ids)}</Descriptions.Item>
               <Descriptions.Item label="Reviewer snapshot (stored)">
-                {staffDetailRecord.advisor_snapshot || "—"}
+                {staffDetailRecord.reviewer_snapshot || "—"}
               </Descriptions.Item>
               <Descriptions.Item label="Abstract">{staffDetailRecord.abstract || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Description">{staffDetailRecord.description || "—"}</Descriptions.Item>
             </Descriptions>
             <div>
               <Title level={5}>Files</Title>
@@ -2525,6 +3798,25 @@ function App() {
       >
         <Paragraph type="secondary">Please provide a clear reason for rejection.</Paragraph>
         <TextArea rows={4} value={libraryRejectReason} onChange={(event) => setLibraryRejectReason(event.target.value)} />
+      </Modal>
+      <Modal
+        title="Director reject"
+        open={directorRejectModalOpen}
+        onOk={confirmDirectorReject}
+        onCancel={() => {
+          setDirectorRejectModalOpen(false);
+          setDirectorRejectTargetId(null);
+          setDirectorRejectReason("");
+        }}
+        okText="Reject"
+        okButtonProps={{ danger: true }}
+      >
+        <Paragraph type="secondary">Please provide a clear reason for rejection.</Paragraph>
+        <TextArea
+          rows={4}
+          value={directorRejectReason}
+          onChange={(event) => setDirectorRejectReason(event.target.value)}
+        />
       </Modal>
     </Layout>
   );

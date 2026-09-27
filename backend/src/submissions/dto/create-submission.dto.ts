@@ -1,5 +1,5 @@
 import { Transform } from "class-transformer";
-import { ArrayNotEmpty, IsArray, IsNotEmpty, IsString } from "class-validator";
+import { ArrayNotEmpty, IsArray, IsNotEmpty, IsOptional, IsString } from "class-validator";
 import { ThesisMetadataFieldsDto } from "./thesis-metadata-fields.dto";
 
 function parseAuthorIds(value: unknown): string[] {
@@ -64,9 +64,29 @@ export class CreateSubmissionDto extends ThesisMetadataFieldsDto {
   @IsNotEmpty()
   thesisYear!: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  abstract!: string;
+  abstract?: string;
+
+  @IsOptional()
+  @IsString()
+  dateIssued?: string;
+
+  @IsOptional()
+  @IsString()
+  publisher?: string;
+
+  @IsOptional()
+  @IsString()
+  documentType?: string;
+
+  @IsOptional()
+  @IsString()
+  language?: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
 
   @IsString()
   @IsNotEmpty()

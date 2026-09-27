@@ -35,6 +35,7 @@ JSON:
 
 ## Lỗi
 
+- **403 Forbidden** — `login_method=google` và tài khoản không phải admin (dùng Google).
 - **401 Unauthorized** — Sai tên đăng nhập hoặc mật khẩu (`Invalid username or password`).
 - **400 Bad Request** — Body không hợp lệ (validation).
 

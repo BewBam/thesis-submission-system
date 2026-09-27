@@ -1,0 +1,29 @@
+# Secrets and local env. Commit only *.env.example.
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Uploaded theses and local runtime data
+backend/uploads/
+
+# Local session cookies (DSpace / curl)
+cookies.txt
+
+# Test and script output
+playwright-report/
+test-results/
+blob-report/
+scripts/out/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log

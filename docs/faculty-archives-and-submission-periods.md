@@ -142,13 +142,36 @@ flowchart LR
   S --> W[Workflow reviewing ...]
 ```
 
-### 5.3 Publish lên DSpace (sau approve)
+### 5.3 Publish lên DSpace (khi Director Archive)
 
-1. Đọc `submission.submission_period_id` → `semester` → `dspace_collection_id`.
-2. Tạo item trong collection tương ứng.
-3. Lưu `submissions.dspace_item_id`.
+1. Giám đốc Archive → status `archived`.
+2. Backend auto-login DSpace (`dspace_api_user` / `dspace_api_password`, hoặc token fallback).
+3. Đích collection: ưu tiên `submission_periods.dspace_collection_id`, fallback `semesters.dspace_collection_id`.
+4. Tạo item trong collection tương ứng; lưu `submissions.dspace_item_id`.
 
-Nếu thiếu collection hoặc community đã xóa trên DSpace → job báo lỗi, `library_staff` xử lý thủ công.
+Nếu thiếu credentials / collection → fallback `dev-item-*` hoặc bỏ trống; Archive vẫn thành công.
+
+### 5.4 Sync từ root community (map theo tên)
+
+Cấu trúc DSpace kỳ vọng:
+
+```text
+[root community]                 ← dspace_root_community_id
+├── Khoa CNTT                    ← sub-community → faculties (map theo name/code)
+│   ├── Học kỳ 1 — 2025          ← sub-community → semesters (map theo name/code)
+│   │   ├── Đợt nộp HK1/2025     ← collection → submission_periods (map theo name)
+│   │   └── ...
+│   └── ...
+└── ...
+```
+
+Hỗ trợ thêm: dưới học kỳ có **sub-community đợt nộp** rồi mới tới collection — vẫn map period theo tên sub-com, lấy collection con.
+
+**API:** `POST /api/archive-config/dspace/sync-from-root` (library_staff / admin)
+
+**UI:** Archive configuration → **Sync from DSpace root**
+
+Điều kiện: đã cấu hình `dspace_api_base_url` + user/password (hoặc token) và `dspace_root_community_id`. Portal phải đã có faculty / semester / period trùng tên (không phân biệt hoa thường / dấu). Sync chỉ **ghi ID**, không tạo bản ghi Portal mới.
 
 ---
 
@@ -350,6 +373,7 @@ Base: `/api/archive-config` (hoặc tách module `faculties`, `semesters`, `peri
 | `POST` | `/api/archive-config/faculties` | `library_staff`, `admin` |
 | `PATCH` | `/api/archive-config/faculties/:id` | `library_staff`, `admin` |
 | `POST` | `/api/archive-config/faculties/:id/provision-dspace` | `library_staff`, `admin` |
+| `POST` | `/api/archive-config/dspace/sync-from-root` | `library_staff`, `admin` — map ID theo tên từ root community |
 | `GET` | `/api/archive-config/faculties/:id/semesters` | `library_staff`, `admin`, `director` |
 | `POST` | `/api/archive-config/faculties/:id/semesters` | `library_staff`, `admin` |
 | `GET` | `/api/archive-config/faculties/:id/submission-periods` | `library_staff`, `admin`, `director` |

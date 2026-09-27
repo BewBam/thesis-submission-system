@@ -1,0 +1,576 @@
+AUTOMATION TESTING PLAN
+THESIS SUBMISSION PORTAL
+========================================
+
+Phạm vi: năm chức năng chính
+- Nộp bài
+- File PDF
+- Approve / Reject
+- Nộp lại
+- Push to DSpace
+
+Thêm một lớp integration riêng: email workflow, chỉ local, không nằm trong 6 kịch bản Playwright.
+
+Tài liệu này thay bản kế hoạch rộng trước đó. Không kiểm thử admin, filter, pagination, Google OAuth, hay component React riêng lẻ trong đồ án.
+
+
+1. MỤC TIÊU
+
+Tự động kiểm tra lifecycle luận văn trên portal đang chạy:
+
+    Sinh viên nộp (kèm PDF)
+        ->
+    Phản biện approve hoặc reject
+        ->
+    (nếu reject) Sinh viên nộp lại
+        ->
+    Thư viện approve hoặc reject
+        ->
+    Giám đốc archive
+        ->
+    Thư viện / admin push item + PDF lên DSpace
+
+Hai lớp test:
+
+- API test (Jest + Supertest + PostgreSQL test): phần lớn case, gồm rule nghiệp vụ và PDF.
+- E2E (Playwright): ít kịch bản, đi trên giao diện thật.
+
+Không đặt mục tiêu 100% coverage. Không ghi số Passed/Failed vào luận văn trước khi chạy test thật.
+
+
+2. HỆ THỐNG THẬT CẦN BÁM
+
+Frontend: React + Ant Design, http://localhost:5173
+Backend: NestJS, http://localhost:3000
+Database: PostgreSQL thesis_portal
+Đăng nhập test: username + password. System setting login_method phải là username.
+
+Role dùng trong luồng này:
+
+- student
+- reviewer
+- library_staff
+- director
+
+Admin không duyệt bài. Admin có quyền configure_system nên có thể gọi API push DSpace, nhưng luồng nghiệp vụ push thuộc thư viện.
+
+Trạng thái submission:
+
+- draft
+- reviewing
+- approved
+- rejected
+- archived
+
+Không dùng các tên PENDING_REVIEWER, PENDING_LIBRARY, READY_TO_ARCHIVE.
+
+
+3. LUỒNG NGHIỆP VỤ
+
+3.1. Nộp bài
+
+POST /submissions          multipart, nộp thẳng, status = reviewing
+POST /submissions/drafts   lưu nháp, status = draft
+POST /submissions/:id/submit   nộp từ draft, hoặc nộp lại
+
+Điều kiện nộp:
+
+- Đợt nộp đang open (khi nộp từ draft hoặc nộp mới).
+- Sinh viên chỉ nộp với studentId của chính mình.
+- Phải có ít nhất một reviewer.
+- Phải có file PDF (file mới hoặc file đã lưu).
+- Mỗi sinh viên chỉ một bài không phải draft tại một thời điểm.
+
+3.2. PDF
+
+Field upload: thesisFile
+Chấp nhận: tên file kết thúc bằng .pdf, mime application/pdf hoặc application/x-pdf (mime rỗng vẫn được nếu đuôi .pdf).
+Tối đa: 30 MB (THESIS_MAX_FILE_SIZE_MB).
+File không phải PDF: HTTP 400, message "Thesis file must be a PDF".
+
+3.3. Approve / Reject
+
+Phản biện — POST /reviews/action
+Body: { "submissionId", "action": "approve" | "reject", "comment" }
+
+- Chỉ reviewer được gán, decision còn pending, submission đang reviewing.
+- Reject bắt buộc comment.
+- Một reviewer reject -> status = rejected.
+- Một reviewer approve chưa đủ -> status vẫn reviewing, bài chưa vào hàng đợi thư viện.
+- Tất cả reviewer approve, không ai reject -> status vẫn reviewing, nhưng đủ điều kiện library intake.
+
+Thư viện — POST /reviews/library-action
+Body: { "submissionId", "action": "approve" | "reject", "comment" }
+
+- Chỉ library_staff.
+- Bài phải đang reviewing, đã có review, không còn pending, không có decision reject.
+- Approve -> status = approved.
+- Reject bắt buộc comment -> status = rejected.
+- action = archive -> 400 "Library staff cannot archive submissions".
+
+Giám đốc — POST /reviews/director-action
+Body: { "submissionId", "action": "archive" | "reject", "comment" }
+
+- Chỉ director, bài phải đang approved.
+- archive -> status = archived. Chưa gọi DSpace.
+  Response: { "ok": true, "dspaceDeferred": true, "message": "Archived to period. Push to DSpace later from Archive configuration." }
+- reject bắt buộc comment -> status = rejected.
+
+3.4. Nộp lại
+
+POST /submissions/:id/submit khi status là rejected hoặc approved.
+
+- Status trở lại reviewing.
+- Tạo lại vòng review (reviewer decision về pending).
+- PDF cũ được giữ nếu không upload file mới.
+- Bài archived không nộp lại được.
+- Bài đang reviewing đã có reviewer quyết định thì không sửa / không nộp lại cho đến khi kết thúc vòng.
+
+3.5. Push to DSpace
+
+Archive và publish là hai bước.
+
+Bước 1 — Director archive: chỉ đổi status portal thành archived.
+Bước 2 — POST /archive-config/dspace/publish
+Quyền: library_intake hoặc configure_system (thư viện hoặc admin).
+Body:
+
+    {
+      "submissionIds": ["<uuid>"],
+      "collectionId": "<dspace collection uuid>"
+    }
+
+Chỉ publish bài status approved hoặc archived. Status khác thì skip.
+Kết quả từng bài nằm trong results[]: ok, dspaceItemId, bitstreamUploaded, message.
+
+Cách đọc dspace_item_id:
+
+- UUID không bắt đầu bằng dev-item- và dspace_publish_status = published: item thật, PDF lên bundle nếu bitstreamUploaded = true.
+- Bắt đầu bằng dev-item- và mode = dev: DSpace chưa cấu hình, chỉ placeholder local. Status publish giữ pending.
+- ok = false hoặc dspace_publish_status = failed: publish lỗi, bài portal vẫn archived, không mất dữ liệu.
+- message "No DSpace collection selected": thiếu collectionId / collection của đợt.
+
+
+4. CHIẾN LƯỢC
+
+                /\
+               /E2E\          6 kịch bản giao diện
+              /------\
+             /  API   \       toàn bộ rule của 5 chức năng
+            /----------\
+
+API test là trọng tâm vì rule nằm ở backend (quyền, trạng thái, PDF, DSpace).
+E2E chỉ chứng minh người dùng đi được luồng trên Ant Design.
+
+Không làm trong đồ án:
+
+- Unit test phủ rộng service (service gọi SQL trực tiếp).
+- Vitest / React Testing Library. UI không tách component LoginForm, SubmissionForm.
+- Katalon Recorder làm bộ test chính.
+- Google OAuth, quản trị user, filter, search, pagination.
+- E2E trình duyệt cho email, và bật mail khi test URL deploy.
+- Đưa DSpace production hoặc DSpace đầy đủ vào GitHub Actions.
+
+
+5. MÔI TRƯỜNG
+
+Development (docker compose hiện tại):
+
+    Frontend  http://localhost:5173
+    Backend   http://localhost:3000
+    Postgres  localhost:5433, db thesis_portal
+    Mailpit   SMTP 127.0.0.1:1025, API đọc thư http://127.0.0.1:8025
+
+Test tự động dùng database riêng, không dùng volume dev đang có dữ liệu thật:
+
+    thesis_test
+
+Mỗi suite:
+
+    seed user + một đợt nộp open + một collection id
+        ->
+    chạy test
+        ->
+    xóa submission / file tạo ra
+
+Tài khoản seed (password đúng với db/init/003_seed_users.sql):
+
+    student1    student123     student
+                id 11111111-1111-1111-1111-111111111101
+    reviewer1   review123      reviewer
+                id 22222222-2222-2222-2222-222222222201
+    library1    library123     library_staff
+                id 44444444-4444-4444-4444-444444444401
+    director1   director123    director
+                id 55555555-5555-5555-5555-555555555501
+
+Login API:
+
+    POST /auth/login
+    { "username": "student1", "password": "student123" }
+
+Header các request sau: Authorization: Bearer <access_token>
+
+Fixture PDF:
+
+    tests/fixtures/thesis-valid.pdf     PDF nhỏ, hợp lệ
+    tests/fixtures/not-a-pdf.txt        đổi tên hoặc gửi như file .docx / .txt
+    tests/fixtures/too-large.pdf        lớn hơn 30 MB, chỉ dùng ở case kích thước
+
+Đợt nộp: test tự tạo faculty + semester + submission period status open, hoặc dùng period open đã seed. Không có đợt open thì nộp bài fail dù PDF đúng.
+
+
+6. TEST CASE
+
+6.1. Nộp bài
+
+TC-SUB-001  Nộp hợp lệ
+    Student POST /submissions, multipart: metadata, authorIds có chính student1, reviewerIds có reviewer1, thesisFile PDF.
+    Expected: 201, status = reviewing, có bản ghi reviews decision = pending cho reviewer1.
+
+TC-SUB-002  Lưu draft rồi nộp
+    POST /submissions/drafts -> status = draft.
+    POST /submissions/:id/submit kèm đủ field và PDF.
+    Expected: status = reviewing.
+
+TC-SUB-003  Thiếu title tiếng Việt hoặc tiếng Anh
+    Expected: 400, không tạo bài reviewing.
+
+TC-SUB-004  Thiếu submission period hoặc period không open
+    Expected: 400.
+
+TC-SUB-005  Thiếu reviewer
+    Expected: 400, không sang reviewing.
+
+TC-SUB-006  Student nộp thay studentId của người khác
+    Expected: 403.
+
+TC-SUB-007  Chưa login
+    Expected: 401.
+
+TC-SUB-008  Đã có một bài không phải draft, nộp thêm bài mới
+    Expected: bị từ chối. Muốn nộp tiếp thì nộp lại trên bài rejected/approved, không tạo bài thứ hai.
+
+
+6.2. PDF
+
+TC-PDF-001  PDF hợp lệ khi nộp
+    Expected: submission_files có file_type = thesis, download được bằng chủ bài.
+
+TC-PDF-002  Không gửi thesisFile và chưa có file cũ
+    Expected: 400 "Thesis PDF is required". Không sang reviewing.
+
+TC-PDF-003  File .txt hoặc .docx
+    Expected: 400 "Thesis file must be a PDF". Không lưu submission reviewing.
+
+TC-PDF-004  File lớn hơn 30 MB
+    Expected: bị từ chối, có thông báo kích thước.
+
+TC-PDF-005  Tên file có dấu và khoảng trắng, đuôi .pdf
+    Expected: nhận file. Backend đổi khoảng trắng trong tên lưu.
+
+TC-PDF-006  Download
+    GET /submissions/:id/files/:fileId/download
+    Chủ bài, reviewer được gán, library_staff, director: 200, content-type PDF.
+    Student khác: 403.
+    Không có token: 401.
+
+TC-PDF-007  Nộp lại không gửi file mới
+    Expected: giữ PDF cũ, status = reviewing.
+
+
+6.3. Approve / Reject
+
+TC-REV-001  Reviewer thấy bài được gán
+    GET /reviews/my-queue
+    Expected: có bài vừa nộp, không có bài không gán cho reviewer1.
+
+TC-REV-002  Approve khi chỉ có một reviewer
+    POST /reviews/action { action: "approve" }
+    Expected: 200. reviews.decision = approved. status vẫn reviewing.
+    GET /reviews/library-queue bằng library1: bài xuất hiện.
+
+TC-REV-003  Hai reviewer, mới một người approve
+    Expected: status vẫn reviewing. library-queue không có bài.
+
+TC-REV-004  Reject không comment
+    Expected: 400 "Reject reason is required". decision vẫn pending. status vẫn reviewing.
+
+TC-REV-005  Reject có comment
+    Expected: status = rejected. comment được lưu. library-queue không có bài.
+
+TC-REV-006  Reviewer không được gán
+    Expected: 404 "Submission not assigned to this reviewer".
+
+TC-REV-007  Quyết định lần hai
+    Expected: 400 "Review already completed".
+
+TC-REV-008  Student hoặc library gọi POST /reviews/action
+    Expected: 403.
+
+TC-LIB-001  Library approve sau khi mọi reviewer đã approve
+    POST /reviews/library-action { action: "approve" }
+    Expected: status = approved.
+    GET /reviews/director-queue: bài xuất hiện.
+
+TC-LIB-002  Library reject có comment
+    Expected: status = rejected.
+
+TC-LIB-003  Library reject không comment
+    Expected: 400. status không đổi.
+
+TC-LIB-004  Library approve khi còn reviewer pending
+    Expected: 400 "Submission is not ready for library intake".
+
+TC-LIB-005  Library gọi action archive
+    Expected: 400 "Library staff cannot archive submissions".
+
+TC-DIR-001  Director archive bài approved
+    POST /reviews/director-action { action: "archive" }
+    Expected: status = archived, dspaceDeferred = true.
+    dspace_item_id chưa bắt buộc có ngay sau bước này.
+
+TC-DIR-002  Director reject bài approved, có comment
+    Expected: status = rejected.
+
+TC-DIR-003  Director archive bài đang reviewing hoặc rejected
+    Expected: 400 "Only approved submissions can be archived or rejected by the director".
+
+TC-DIR-004  Reviewer hoặc library gọi director-action
+    Expected: 403.
+
+
+6.4. Nộp lại
+
+TC-RES-001  Sau reviewer reject
+    Student POST /submissions/:id/submit, sửa title, có thể không gửi PDF mới.
+    Expected: status = reviewing. Reviewer decision = pending. my-queue của reviewer có lại bài.
+
+TC-RES-002  Sau library reject
+    Cùng expected TC-RES-001.
+
+TC-RES-003  Sau khi thư viện đã approved, trước khi director archive
+    Expected: được nộp lại, status = reviewing, rời director queue.
+
+TC-RES-004  Bài archived
+    Expected: không submit lại được.
+
+TC-RES-005  Bài reviewing đã có ít nhất một decision
+    Expected: không sửa thành vòng mới cho đến khi bị reject hoặc được library approve.
+
+
+6.5. Push to DSpace
+
+Tách hai mức. Mức A luôn chạy trong API test. Mức B chỉ chạy khi máy có DSpace test.
+
+Mức A — không cần DSpace sống
+
+TC-DSP-001  Archive chưa phải publish
+    Sau director archive, trước POST dspace/publish:
+    status = archived, response có dspaceDeferred = true.
+
+TC-DSP-002  Publish thiếu collectionId hoặc submissionIds rỗng
+    Expected: 400.
+
+TC-DSP-003  Publish bài chưa archive và chưa approved (đang reviewing hoặc rejected)
+    Expected: results[].ok = false hoặc mode skipped. Message kiểu skip theo status. status portal không bị đổi thành published.
+
+TC-DSP-004  Student hoặc reviewer gọi POST /archive-config/dspace/publish
+    Expected: 403.
+
+TC-DSP-005  DSpace chưa cấu hình (không có base URL / user hợp lệ), collectionId giả dạng UUID
+    Expected: portal vẫn archived. dspace_item_id dạng dev-item-... hoặc publish failed. Không xóa submission, không xóa PDF local.
+
+Mức B — DSpace test local đã bật
+(base URL từ Docker backend: http://host.docker.internal:8080/server, user/password trong system settings)
+
+TC-DSP-006  Library push một bài archived vào collection thật
+    POST /archive-config/dspace/publish
+    Expected: results[0].ok = true, dspaceItemId là UUID không có tiền tố dev-item-, dspace_publish_status = published.
+
+TC-DSP-007  Metadata
+    Item DSpace có dc.title từ title bài, author, abstract. dc.type = Thesis.
+
+TC-DSP-008  PDF
+    bitstreamUploaded = true. Bitstream nằm trong bundle ORIGINAL.
+
+TC-DSP-009  Sai collection hoặc DSpace trả lỗi
+    Expected: results[].ok = false, dspace_publish_status = failed, status portal vẫn archived, file local còn.
+
+TC-DSP-010  Gọi publish lần hai khi đã có dspace_item_id thật
+    Expected: không tạo item mới. Có thể upload bù PDF nếu lần trước thiếu file.
+
+
+6.6. Email (integration, chỉ local)
+
+Không gửi SMTP ra ngoài. Mailpit nhận thư. Suite nộp bài / PDF / duyệt giữ email_enabled = false và không cần Mailpit.
+
+Vì sao tách: system_settings.email_enabled được seed false và được ưu tiên hơn biến môi trường. Workflow gọi notifySafely: lỗi SMTP không làm fail nộp bài hay duyệt. Địa chỉ người nhận là username@hcmut.edu.vn.
+
+Chỉ chạy khi không có API_URL. Remote không có hộp thư test.
+
+Trước nhóm này, trên thesis_test:
+
+    email_enabled = true
+    smtp_host = 127.0.0.1
+    smtp_port = 1025
+    smtp_secure = false
+    smtp_user và smtp_password để trống
+
+Sau nhóm này, đặt lại email_enabled = false.
+
+Mail gửi bất đồng bộ. Test poll GET http://127.0.0.1:8025/api/v1/messages theo tiêu đề bài cho đến khi có thư hoặc hết thời gian chờ.
+
+Spec: backend/test/mail.e2e-spec.ts
+
+TC-MAIL-001  Nộp bài
+    Expected: thư tới reviewer được gán (reviewer1@hcmut.edu.vn) và tới sinh viên.
+
+TC-MAIL-002  Reviewer reject có comment
+    Expected: thư sinh viên chứa lý do từ chối.
+
+TC-MAIL-003  Mọi reviewer approve
+    Expected: thư tới library1@hcmut.edu.vn.
+    Nếu còn reviewer pending: chưa có thư thư viện.
+
+TC-MAIL-004  Library approve
+    Expected: thư tới director1@hcmut.edu.vn.
+
+TC-MAIL-005  Library reject hoặc director reject, có comment
+    Expected: thư sinh viên chứa lý do.
+
+TC-MAIL-006  Director archive
+    Expected: thư sinh viên. Bài vẫn archived.
+
+TC-MAIL-007  SMTP không tới được (host hoặc port đóng)
+    Expected: API nộp hoặc duyệt vẫn thành công. Ứng dụng không crash.
+
+
+7. E2E PLAYWRIGHT
+
+Chỉ 6 test. Locator bám label và chữ nút hiện có, không giả định nút "New Submission" hay ô Email.
+
+Đăng nhập: label Username, label Password, nút Login.
+Sau login: nút Log out.
+Dropdown khoa / học kỳ / đợt / reviewer là Ant Design Select, không dùng selectOption của HTML select.
+Upload: gửi đường dẫn tuyệt đối vào input[type=file].
+
+E2E-001  student1 nộp PDF hợp lệ, thấy status reviewing.
+E2E-002  Nộp không có PDF: còn trên form, có lỗi, không có bài reviewing mới.
+E2E-003  reviewer1 reject kèm lý do. student1 thấy rejected, sửa và Submit again, reviewer thấy bài trong Need My Review.
+E2E-004  reviewer1 approve, library1 approve, director1 Archive. UI báo đã archive, push DSpace để sau.
+E2E-005  library1 mở hàng đợi publish và đẩy bài archived. Nếu không có DSpace: chấp nhận thông báo placeholder / lỗi, bài vẫn archived. Nếu có DSpace: thấy item id.
+E2E-006  student1 mở URL thao tác thư viện hoặc gọi hành vi approve: không duyệt được.
+
+E2E-004 và E2E-005 dùng bài tạo trong test rồi dọn, hoặc tạo qua API ở beforeEach cho nhanh và chỉ để UI thực hiện bước cuối. Không phụ thuộc dữ liệu cũ của student1.
+
+
+8. CẤU TRÚC FILE KHI LÀM
+
+    backend/test/
+      auth.helper.ts
+      submissions.e2e-spec.ts      TC-SUB, TC-PDF, TC-RES
+      reviews.e2e-spec.ts          TC-REV, TC-LIB, TC-DIR
+      dspace-publish.e2e-spec.ts   TC-DSP mức A
+    playwright/
+      submit.spec.ts               E2E-001, E2E-002
+      review-resubmit.spec.ts      E2E-003
+      archive-dspace.spec.ts       E2E-004, E2E-005
+      authz.spec.ts                E2E-006
+    tests/fixtures/
+      thesis-valid.pdf
+
+Script npm (thêm khi bắt đầu làm, chưa có trong repo):
+
+    backend:  "test:e2e": "jest --config ./test/jest-e2e.json"
+    root:     "test:e2e": "playwright test"
+
+Ví dụ API nộp bài: multipart, không phải JSON thuần.
+
+    POST /submissions
+    Authorization: Bearer <student token>
+    thesisFile: thesis-valid.pdf
+    studentId: 11111111-1111-1111-1111-111111111101
+    authorIds: ["11111111-1111-1111-1111-111111111101"]
+    reviewerIds: ["22222222-2222-2222-2222-222222222201"]
+    submissionPeriodId: <uuid đợt open>
+    titleVi, titleEn, abstract, ...
+
+Ví dụ approve:
+
+    POST /reviews/action
+    { "submissionId": "<uuid>", "action": "approve" }
+
+Ví dụ push:
+
+    POST /archive-config/dspace/publish
+    { "submissionIds": ["<uuid>"], "collectionId": "<uuid>" }
+
+
+9. THỨ TỰ LÀM
+
+1. Database test + seed 4 user + 1 đợt open.           4–6 ngày
+2. API nộp bài và PDF (TC-SUB, TC-PDF).                4–5 ngày
+3. API approve/reject đủ 3 cấp (TC-REV, TC-LIB, TC-DIR). 4–5 ngày
+4. API nộp lại (TC-RES).                               2 ngày
+5. API DSpace mức A (TC-DSP-001 đến 005).              2–3 ngày
+6. Sáu test Playwright.                                7–10 ngày
+7. Email integration với Mailpit (TC-MAIL), chỉ local. 2–3 ngày
+8. DSpace mức B, chỉ nếu DSpace local đã chạy.         3–5 ngày
+9. Viết chương luận văn từ báo cáo chạy thật.          3–5 ngày
+
+Tổng phần nên làm: khoảng 4–5 tuần.
+Bỏ mức B nếu chưa có DSpace: vẫn đủ đồ án, miễn nói rõ publish được kiểm bằng placeholder và case lỗi.
+
+CI: nếu còn thời gian, GitHub Actions chỉ chạy API test mức A. Không cài DSpace trên CI.
+
+
+10. TRÌNH BÀY TRONG LUẬN VĂN
+
+5.x Automated Testing
+
+5.x.1 Phạm vi
+    Nộp bài, PDF, approve/reject, nộp lại, push DSpace, email workflow (Mailpit, chỉ local).
+    Những gì cố ý không tự động hóa.
+
+5.x.2 Workflow và trạng thái thật
+    draft, reviewing, approved, rejected, archived.
+    Archive khác push DSpace.
+
+5.x.3 Môi trường
+    Jest, Supertest, PostgreSQL test, Playwright, Mailpit.
+    DSpace test nếu có mức B.
+
+5.x.4 Test case
+    Bảng TC-SUB, TC-PDF, TC-REV, TC-LIB, TC-DIR, TC-RES, TC-DSP, TC-MAIL, E2E.
+
+5.x.5 Kết quả
+    Điền sau khi chạy. Không điền số giả.
+
+    Nhóm        | Số case | Passed | Failed
+    Nộp bài     |         |        |
+    PDF         |         |        |
+    Approve/Reject |      |        |
+    Nộp lại     |         |        |
+    DSpace      |         |        |
+    Email       |         |        |
+    E2E         |         |        |
+
+
+11. TÓM TẮT
+
+Bộ test của đồ án kiểm tra đúng một lifecycle:
+
+    Nộp PDF
+        ->
+    Reviewer approve hoặc reject
+        ->
+    Nộp lại nếu bị reject
+        ->
+    Library approve hoặc reject
+        ->
+    Director archive (portal = archived, chưa đẩy DSpace)
+        ->
+    POST /archive-config/dspace/publish
+
+API test phủ rule. Playwright phủ 6 đường trên UI. Email kiểm bằng Mailpit trên local, không gửi SMTP ra ngoài. DSpace thật là phần thêm khi môi trường local đã có.

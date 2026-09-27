@@ -1,67 +1,43 @@
 -- =============================================================================
 -- Thesis Portal — full database (final schema for a new database)
 -- =============================================================================
--- Run against an empty database, e.g. thesis_portal:
+-- db/init/001_schema.sql and db/thesis_portal_full.sql are the same script.
+-- Docker Compose mounts db/init into docker-entrypoint-initdb.d.
+-- Run this only on an empty database. An existing volume does not re-run it.
 --
 --   psql -U thesis_user -d thesis_portal -f db/thesis_portal_full.sql
---
--- Docker:
---   Get-Content db/thesis_portal_full.sql | docker exec -i thesis_postgres psql -U thesis_user -d thesis_portal
 -- =============================================================================
+
+SET client_encoding = 'UTF8';
 
 -- -----------------------------------------------------------------------------
 -- Archive hierarchy
 -- -----------------------------------------------------------------------------
 
-CREATE TABLE universities (
-  id UUID PRIMARY KEY,
-  name TEXT NOT NULL,
-  code TEXT NOT NULL UNIQUE,
-  status TEXT NOT NULL DEFAULT 'active'
-    CHECK (status IN ('active', 'inactive')),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 CREATE TABLE faculties (
   id UUID PRIMARY KEY,
-  university_id UUID NOT NULL REFERENCES universities(id),
-  code TEXT NOT NULL,
   name TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active'
     CHECK (status IN ('active', 'inactive')),
-  dspace_community_id TEXT,
-  dspace_sync_status TEXT NOT NULL DEFAULT 'pending'
-    CHECK (dspace_sync_status IN ('pending', 'synced', 'failed')),
   created_by TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (university_id, code)
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-CREATE INDEX idx_faculties_university ON faculties (university_id);
 
 CREATE TABLE semesters (
   id UUID PRIMARY KEY,
   faculty_id UUID NOT NULL REFERENCES faculties(id),
-  code TEXT NOT NULL,
   name TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active'
     CHECK (status IN ('active', 'inactive')),
-  dspace_community_id TEXT,
-  dspace_collection_id TEXT,
-  collection_name TEXT NOT NULL DEFAULT '',
-  dspace_sync_status TEXT NOT NULL DEFAULT 'pending'
-    CHECK (dspace_sync_status IN ('pending', 'synced', 'failed')),
   created_by TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (faculty_id, code)
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_semesters_faculty ON semesters (faculty_id);
 
 CREATE TABLE submission_periods (
   id UUID PRIMARY KEY,
-  faculty_id UUID NOT NULL REFERENCES faculties(id),
   semester_id UUID NOT NULL REFERENCES semesters(id),
   name TEXT NOT NULL,
   opens_at TIMESTAMPTZ NOT NULL,
@@ -69,31 +45,56 @@ CREATE TABLE submission_periods (
   status TEXT NOT NULL DEFAULT 'draft'
     CHECK (status IN ('draft', 'open', 'closed', 'archived')),
   allow_resubmit BOOLEAN NOT NULL DEFAULT TRUE,
+  dspace_collection_id TEXT,
   created_by TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK (opens_at < closes_at)
 );
 
-CREATE INDEX idx_submission_periods_faculty ON submission_periods (faculty_id);
+COMMENT ON COLUMN submission_periods.dspace_collection_id IS
+  'DSpace collection UUID for this submission period (preferred publish target)';
+
 CREATE INDEX idx_submission_periods_semester ON submission_periods (semester_id);
 CREATE INDEX idx_submission_periods_status ON submission_periods (status);
 
+CREATE TABLE dspace_sync_nodes (
+  dspace_id TEXT PRIMARY KEY,
+  root_community_id TEXT NOT NULL,
+  parent_dspace_id TEXT,
+  node_type TEXT NOT NULL
+    CHECK (node_type IN ('community', 'collection')),
+  name TEXT NOT NULL,
+  depth INTEGER NOT NULL DEFAULT 0
+    CHECK (depth >= 0),
+  path TEXT NOT NULL DEFAULT '',
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  last_synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_dspace_sync_nodes_root ON dspace_sync_nodes (root_community_id);
+CREATE INDEX idx_dspace_sync_nodes_parent ON dspace_sync_nodes (parent_dspace_id);
+CREATE INDEX idx_dspace_sync_nodes_type ON dspace_sync_nodes (node_type);
+
 -- -----------------------------------------------------------------------------
--- Users & permissions
+-- Users and permissions
 -- -----------------------------------------------------------------------------
 
 CREATE TABLE users (
-  id UUID PRIMARY KEY,
-  username TEXT NOT NULL UNIQUE,
-  password TEXT NOT NULL,
+  username TEXT PRIMARY KEY,
+  password TEXT,
   display_name TEXT NOT NULL,
+  auth_source TEXT NOT NULL DEFAULT 'local'
+    CHECK (auth_source IN ('local', 'google')),
   role TEXT NOT NULL
     CHECK (role IN ('student', 'reviewer', 'library_staff', 'director', 'admin')),
   status TEXT NOT NULL DEFAULT 'active'
     CHECK (status IN ('active', 'disabled')),
   faculty_id UUID REFERENCES faculties(id),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT users_academic_faculty_required CHECK (
+    role NOT IN ('student', 'reviewer') OR faculty_id IS NOT NULL
+  )
 );
 
 CREATE INDEX idx_users_role ON users (role);
@@ -120,14 +121,15 @@ CREATE TABLE submissions (
   id UUID PRIMARY KEY,
   title TEXT NOT NULL,
   author TEXT NOT NULL DEFAULT '',
-  advisor TEXT NOT NULL DEFAULT '',
+  reviewer TEXT NOT NULL DEFAULT '',
   abstract TEXT NOT NULL DEFAULT '',
   keywords TEXT NOT NULL DEFAULT '',
-  student_id TEXT NOT NULL,
-  advisor_id TEXT,
+  student_id TEXT NOT NULL REFERENCES users(username),
   status TEXT NOT NULL
     CHECK (status IN ('draft', 'reviewing', 'approved', 'rejected', 'archived')),
   dspace_item_id TEXT,
+  dspace_publish_status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (dspace_publish_status IN ('pending', 'published', 'failed')),
   submission_period_id UUID REFERENCES submission_periods(id),
   university_name TEXT NOT NULL DEFAULT '',
   faculty_name TEXT NOT NULL DEFAULT '',
@@ -138,12 +140,29 @@ CREATE TABLE submissions (
   thesis_advisors TEXT NOT NULL DEFAULT '',
   major TEXT NOT NULL DEFAULT '',
   thesis_year TEXT NOT NULL DEFAULT '',
+  date_issued TEXT NOT NULL DEFAULT '',
+  publisher TEXT NOT NULL DEFAULT '',
+  document_type TEXT NOT NULL DEFAULT 'Thesis',
+  language TEXT NOT NULL DEFAULT 'vie',
+  description TEXT NOT NULL DEFAULT '',
+  extra_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX idx_submissions_status ON submissions (status);
+CREATE INDEX idx_submissions_student_id ON submissions (student_id);
+CREATE INDEX idx_submissions_period_id ON submissions (submission_period_id);
 
 CREATE UNIQUE INDEX idx_submissions_one_active_per_student
   ON submissions (student_id)
   WHERE status <> 'draft';
+
+CREATE UNIQUE INDEX idx_submissions_one_draft_per_student
+  ON submissions (student_id)
+  WHERE status = 'draft';
+
+COMMENT ON INDEX idx_submissions_one_draft_per_student IS
+  'Each student may have at most one draft; submit converts draft to reviewing';
 
 CREATE TABLE submission_files (
   id UUID PRIMARY KEY,
@@ -155,40 +174,32 @@ CREATE TABLE submission_files (
 
 CREATE TABLE submission_authors (
   submission_id UUID NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
   sort_order INT NOT NULL DEFAULT 0,
   PRIMARY KEY (submission_id, user_id)
 );
 
 CREATE INDEX idx_submission_authors_user ON submission_authors (user_id);
 
-CREATE TABLE submission_reviewers (
-  submission_id UUID NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  sort_order INT NOT NULL DEFAULT 0,
-  PRIMARY KEY (submission_id, user_id)
-);
-
-CREATE INDEX idx_submission_reviewers_user ON submission_reviewers (user_id);
-
 CREATE TABLE reviews (
   id UUID NOT NULL DEFAULT gen_random_uuid(),
   submission_id UUID NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
-  reviewer_id UUID NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending', 'approved', 'reject')),
+  reviewer_id TEXT NOT NULL REFERENCES users(username),
   decision TEXT NOT NULL DEFAULT 'pending'
     CHECK (decision IN ('pending', 'approved', 'reject')),
   comment TEXT,
+  sort_order INT NOT NULL DEFAULT 0,
   decided_at TIMESTAMPTZ,
-  PRIMARY KEY (submission_id, reviewer_id),
-  CONSTRAINT reviews_submission_reviewer_uniq UNIQUE (submission_id, reviewer_id)
+  PRIMARY KEY (submission_id, reviewer_id)
 );
+
+CREATE INDEX idx_reviews_reviewer_decision ON reviews (reviewer_id, decision);
+CREATE INDEX idx_reviews_submission_sort ON reviews (submission_id, sort_order);
 
 CREATE TABLE submission_events (
   id UUID PRIMARY KEY,
   submission_id UUID NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
-  actor_id TEXT,
+  actor_id TEXT REFERENCES users(username) ON DELETE SET NULL,
   actor_role TEXT,
   event_type TEXT NOT NULL,
   payload JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -198,20 +209,92 @@ CREATE TABLE submission_events (
 CREATE INDEX idx_submission_events_submission_time
   ON submission_events (submission_id, created_at DESC);
 
+CREATE OR REPLACE FUNCTION check_submitter_is_author()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.status = 'draft' THEN
+    RETURN NEW;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM submission_authors sa
+    WHERE sa.submission_id = NEW.id
+      AND sa.user_id = NEW.student_id
+  ) THEN
+    RAISE EXCEPTION 'Submitter (%) must be listed in submission_authors for non-draft submission %',
+      NEW.student_id, NEW.id
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER trg_submitter_is_author
+  AFTER INSERT OR UPDATE OF student_id, status ON submissions
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW
+  EXECUTE FUNCTION check_submitter_is_author();
+
+CREATE TABLE submission_form_fields (
+  id UUID PRIMARY KEY,
+  field_key TEXT NOT NULL UNIQUE,
+  label TEXT NOT NULL,
+  dspace_path TEXT NOT NULL DEFAULT '',
+  input_type TEXT NOT NULL DEFAULT 'text'
+    CHECK (input_type IN ('text', 'textarea', 'select', 'year')),
+  required BOOLEAN NOT NULL DEFAULT FALSE,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  sort_order INT NOT NULL DEFAULT 0,
+  options JSONB NOT NULL DEFAULT '[]'::jsonb,
+  default_value TEXT NOT NULL DEFAULT '',
+  storage TEXT NOT NULL DEFAULT 'extra'
+    CHECK (storage IN ('column', 'extra')),
+  column_name TEXT,
+  system_locked BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (
+    (storage = 'extra' AND column_name IS NULL)
+    OR (storage = 'column' AND column_name IS NOT NULL AND column_name <> '')
+  )
+);
+
+CREATE INDEX idx_submission_form_fields_sort
+  ON submission_form_fields (sort_order ASC, label ASC);
+
 -- -----------------------------------------------------------------------------
--- Seed: demo users (development only)
+-- Seed: faculties (before users that reference them)
 -- -----------------------------------------------------------------------------
 
-INSERT INTO users (id, username, password, display_name, role) VALUES
-  ('11111111-1111-1111-1111-111111111101', 'student1', 'student123', 'Student Alpha', 'student'),
-  ('11111111-1111-1111-1111-111111111102', 'student2', 'student123', 'Student Beta', 'student'),
-  ('11111111-1111-1111-1111-111111111103', 'student3', 'student123', 'Student Gamma', 'student'),
-  ('22222222-2222-2222-2222-222222222201', 'reviewer1', 'review123', 'Reviewer One', 'reviewer'),
-  ('22222222-2222-2222-2222-222222222202', 'reviewer2', 'review123', 'Reviewer Two', 'reviewer'),
-  ('22222222-2222-2222-2222-222222222203', 'reviewer3', 'review123', 'Reviewer Three', 'reviewer'),
-  ('33333333-3333-3333-3333-333333333301', 'admin1', 'admin123', 'Admin One', 'admin'),
-  ('44444444-4444-4444-4444-444444444401', 'library1', 'library123', 'Library Staff One', 'library_staff'),
-  ('55555555-5555-5555-5555-555555555501', 'director1', 'director123', 'Library Director', 'director')
+INSERT INTO faculties (id, name, status) VALUES
+  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0001', 'Khoa Cơ khí', 'active'),
+  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0002', 'Khoa Công nghệ Vật liệu', 'active'),
+  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0003', 'Khoa Điện - Điện tử', 'active'),
+  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0004', 'Khoa Khoa học Ứng dụng', 'active'),
+  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0005', 'Khoa Khoa học và Kỹ thuật Máy tính', 'active'),
+  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0006', 'Khoa Kỹ thuật Địa chất và Dầu khí', 'active'),
+  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0007', 'Khoa Kỹ thuật Giao thông', 'active'),
+  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0008', 'Khoa Kỹ thuật Hóa học', 'active'),
+  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0009', 'Khoa Kỹ thuật Xây dựng', 'active'),
+  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0010', 'Khoa Môi trường và Tài nguyên', 'active'),
+  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0011', 'Khoa Quản lý Công nghiệp', 'active')
+ON CONFLICT (id) DO UPDATE
+SET
+  name = EXCLUDED.name,
+  status = 'active',
+  updated_at = NOW();
+
+-- -----------------------------------------------------------------------------
+-- Seed: bootstrap accounts
+-- -----------------------------------------------------------------------------
+
+INSERT INTO users (username, password, display_name, auth_source, role, faculty_id) VALUES
+  ('student1', 'student123', 'Student Alpha', 'local', 'student', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0005'),
+  ('tuan.ngonhat', 'student123', 'Ngo Nhat Tuan', 'local', 'student', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0005'),
+  ('reviewer1', 'review123', 'Reviewer One', 'local', 'reviewer', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0005'),
+  ('admin1', 'admin123', 'Admin One', 'local', 'admin', NULL),
+  ('library1', 'library123', 'Library Staff One', 'local', 'library_staff', NULL),
+  ('director1', 'director123', 'Library Director', 'local', 'director', NULL)
 ON CONFLICT (username) DO NOTHING;
 
 -- -----------------------------------------------------------------------------
@@ -262,7 +345,7 @@ INSERT INTO role_permissions (role, permission, allowed) VALUES
 ON CONFLICT (role, permission) DO NOTHING;
 
 -- -----------------------------------------------------------------------------
--- Seed: system settings
+-- Seed: system settings (final values after 016–041)
 -- -----------------------------------------------------------------------------
 
 INSERT INTO system_settings (key, value, description) VALUES
@@ -270,61 +353,238 @@ INSERT INTO system_settings (key, value, description) VALUES
   ('submission_timezone', 'Asia/Ho_Chi_Minh', 'Timezone for submission period open/close times'),
   ('library_support_phone', '3864 7256 (5419)', 'Library reference desk contact for deposit support'),
   ('maintenance_mode', 'false', 'When true, only administrators can sign in'),
-  ('dspace_root_community_id', '', 'DSpace UUID of root thesis archive community (optional until Sprint 4)'),
-  ('dspace_api_base_url', '', 'DSpace REST API base URL e.g. https://dspace.example.edu/server'),
-  ('dspace_api_token', '', 'DSpace REST API bearer token (keep empty in dev)')
+  ('login_method', 'username', 'Sign-in method for non-admin users: username (password form) or google (@hcmut.edu.vn). Admins can always use username/password.'),
+  ('dspace_root_community_id', '7fd5cbb5-d2a1-4235-b5b0-7f5894771417', 'DSpace UUID of root archive community. Used as parent when provisioning faculties, and as starting point for Sync from DSpace (map faculty / semester / period by name).'),
+  ('dspace_api_base_url', 'http://host.docker.internal:8080/server', 'DSpace REST API base URL e.g. http://host.docker.internal:8080/server'),
+  ('dspace_api_token', '', 'Optional static Bearer token fallback when dspace_api_user/password are empty'),
+  ('dspace_api_user', 'admin@mail.com', 'DSpace REST login email/username used for auto-login (preferred over dspace_api_token)'),
+  ('dspace_api_password', '123456789', 'DSpace REST login password for auto-login (prefer env DSPACE_API_PASSWORD in production)'),
+  ('email_enabled', 'false', 'When true, send workflow notification emails (requires SMTP settings)'),
+  ('smtp_host', '', 'SMTP server hostname (e.g. smtp.gmail.com)'),
+  ('smtp_port', '587', 'SMTP port (587 STARTTLS, 465 SSL)'),
+  ('smtp_secure', 'false', 'true = TLS/SSL from the start (typically port 465); false = STARTTLS (typically 587)'),
+  ('smtp_user', '', 'SMTP authentication username'),
+  ('smtp_password', '', 'SMTP authentication password (prefer env SMTP_PASSWORD in production)'),
+  ('smtp_from', '', 'From address shown on outgoing mail (e.g. Thesis Portal <noreply@hcmut.edu.vn>)'),
+  ('email_portal_url', 'http://localhost:5173', 'Portal base URL used in email templates ({{portalUrl}})'),
+  (
+    'email_subject_reviewer_assigned',
+    '[Cổng luận văn / Thesis Portal] Có luận văn mới cần phản biện | New thesis awaiting your review',
+    'Subject when a student submits and assigned reviewers are notified. Placeholders: {{title}}, {{studentName}}, {{author}}, {{advisor}}, {{facultyName}}, {{semesterName}}, {{submissionId}}, {{portalUrl}}'
+  ),
+  (
+    'email_body_reviewer_assigned',
+    E'--- Tiếng Việt ---\nXin chào,\n\nMột luận văn đã được nộp và phân công cho bạn phản biện.\n\nTên đề tài: {{title}}\nSinh viên: {{studentName}}\nTác giả: {{author}}\nGVHD: {{advisor}}\nKhoa: {{facultyName}}\nHọc kỳ: {{semesterName}}\n\nĐăng nhập để phản biện:\n{{portalUrl}}\n\n--- English ---\nHello,\n\nA thesis has been submitted and assigned to you for review.\n\nTitle: {{title}}\nStudent: {{studentName}}\nAuthors: {{author}}\nAdvisors: {{advisor}}\nFaculty: {{facultyName}}\nSemester: {{semesterName}}\n\nPlease sign in to review:\n{{portalUrl}}\n\n— Cổng luận văn / Thesis Portal',
+    'Body when assigned reviewers are notified after student submit. Same placeholders as subject.'
+  ),
+  (
+    'email_subject_library_review',
+    '[Cổng luận văn / Thesis Portal] Luận văn sẵn sàng tiếp nhận thư viện | Thesis ready for library intake',
+    'Subject when all reviewers approved and library staff are notified. Placeholders: {{title}}, {{studentName}}, {{author}}, {{advisor}}, {{facultyName}}, {{semesterName}}, {{submissionId}}, {{portalUrl}}'
+  ),
+  (
+    'email_body_library_review',
+    E'--- Tiếng Việt ---\nXin chào,\n\nTất cả phản biện học thuật đã duyệt luận văn. Hồ sơ sẵn sàng để thư viện tiếp nhận.\n\nTên đề tài: {{title}}\nSinh viên: {{studentName}}\nTác giả: {{author}}\nKhoa: {{facultyName}}\nHọc kỳ: {{semesterName}}\n\nĐăng nhập để xử lý:\n{{portalUrl}}\n\n--- English ---\nHello,\n\nAll academic reviewers have approved this thesis. It is ready for library intake.\n\nTitle: {{title}}\nStudent: {{studentName}}\nAuthors: {{author}}\nFaculty: {{facultyName}}\nSemester: {{semesterName}}\n\nPlease sign in to process intake:\n{{portalUrl}}\n\n— Cổng luận văn / Thesis Portal',
+    'Body when library staff are notified after all reviewers approve.'
+  ),
+  (
+    'email_subject_director_review',
+    '[Cổng luận văn / Thesis Portal] Luận văn đã duyệt — sẵn sàng lưu trữ | Thesis approved — ready to archive',
+    'Subject when library staff approved and directors are notified. Placeholders: {{title}}, {{studentName}}, {{author}}, {{advisor}}, {{facultyName}}, {{semesterName}}, {{submissionId}}, {{portalUrl}}'
+  ),
+  (
+    'email_body_director_review',
+    E'--- Tiếng Việt ---\nXin chào,\n\nCán bộ thư viện đã duyệt luận văn. Hồ sơ sẵn sàng để giám đốc lưu trữ.\n\nTên đề tài: {{title}}\nSinh viên: {{studentName}}\nTác giả: {{author}}\nKhoa: {{facultyName}}\nHọc kỳ: {{semesterName}}\n\nĐăng nhập để lưu trữ:\n{{portalUrl}}\n\n--- English ---\nHello,\n\nLibrary staff have approved this thesis. It is ready for director archive.\n\nTitle: {{title}}\nStudent: {{studentName}}\nAuthors: {{author}}\nFaculty: {{facultyName}}\nSemester: {{semesterName}}\n\nPlease sign in to archive:\n{{portalUrl}}\n\n— Cổng luận văn / Thesis Portal',
+    'Body when directors are notified after library staff approve.'
+  ),
+  (
+    'email_subject_student_rejected',
+    '[Cổng luận văn / Thesis Portal] Luận văn của bạn bị từ chối | Your thesis submission was rejected',
+    'Subject when a submission is rejected. Placeholders: {{title}}, {{studentName}}, {{reason}}, {{author}}, {{facultyName}}, {{semesterName}}, {{submissionId}}, {{portalUrl}}'
+  ),
+  (
+    'email_body_student_rejected',
+    E'--- Tiếng Việt ---\nXin chào {{studentName}},\n\nLuận văn của bạn đã bị từ chối.\n\nTên đề tài: {{title}}\nLý do: {{reason}}\n\nBạn có thể chỉnh sửa và nộp lại trên cổng:\n{{portalUrl}}\n\n--- English ---\nHello {{studentName}},\n\nYour thesis submission was rejected.\n\nTitle: {{title}}\nReason: {{reason}}\n\nYou may revise and resubmit in the portal:\n{{portalUrl}}\n\n— Cổng luận văn / Thesis Portal',
+    'Body when the student is notified of rejection (includes {{reason}}).'
+  ),
+  (
+    'email_subject_student_submitted',
+    '[Cổng luận văn / Thesis Portal] Luận văn của bạn đã được {{actionVi}} | Your thesis was {{actionEn}}',
+    'Student notice after submit/resubmit. Placeholders: {{actionVi}}, {{actionEn}}, {{title}}, {{studentName}}, {{portalUrl}}'
+  ),
+  (
+    'email_body_student_submitted',
+    E'--- Tiếng Việt ---\nXin chào {{studentName}},\n\nLuận văn của bạn đã được {{actionVi}} và đang chờ phản biện.\n\nTên đề tài: {{title}}\n\nTheo dõi trên cổng:\n{{portalUrl}}\n\n--- English ---\nHello {{studentName}},\n\nYour thesis has been {{actionEn}} and is now with the assigned reviewers.\n\nTitle: {{title}}\n\nTrack progress in the portal:\n{{portalUrl}}\n\n— Cổng luận văn / Thesis Portal',
+    'Body after student submit/resubmit. {{actionVi}}/{{actionEn}} is nộp|submitted or nộp lại|resubmitted.'
+  ),
+  (
+    'email_subject_student_reviewer_decision',
+    '[Cổng luận văn / Thesis Portal] Phản biện {{decisionVi}} luận văn | A reviewer {{decisionEn}} your thesis',
+    'Student notice when one reviewer approves or rejects. Placeholders: {{decisionVi}}, {{decisionEn}}, {{actorName}}, {{reason}}, {{title}}, {{studentName}}, {{portalUrl}}'
+  ),
+  (
+    'email_body_student_reviewer_decision',
+    E'--- Tiếng Việt ---\nXin chào {{studentName}},\n\nPhản biện {{actorName}} {{decisionVi}} luận văn của bạn.\n\nTên đề tài: {{title}}\n{{reasonBlock}}\nĐăng nhập:\n{{portalUrl}}\n\n--- English ---\nHello {{studentName}},\n\nReviewer {{actorName}} has {{decisionEn}} your thesis.\n\nTitle: {{title}}\n{{reasonBlock}}\nSign in:\n{{portalUrl}}\n\n— Cổng luận văn / Thesis Portal',
+    'Body for a single reviewer decision. {{reasonBlock}} is filled on reject (Lý do / Reason).'
+  ),
+  (
+    'email_subject_student_all_reviewers_approved',
+    '[Cổng luận văn / Thesis Portal] Tất cả phản biện đã duyệt | All reviewers approved your thesis',
+    'Student notice when every assigned reviewer has approved. Placeholders: {{title}}, {{studentName}}, {{portalUrl}}'
+  ),
+  (
+    'email_body_student_all_reviewers_approved',
+    E'--- Tiếng Việt ---\nXin chào {{studentName}},\n\nTất cả phản biện học thuật đã duyệt luận văn. Hồ sơ đang chuyển tới cán bộ thư viện.\n\nTên đề tài: {{title}}\n\n{{portalUrl}}\n\n--- English ---\nHello {{studentName}},\n\nAll academic reviewers have approved your thesis. It is now with library staff.\n\nTitle: {{title}}\n\n{{portalUrl}}\n\n— Cổng luận văn / Thesis Portal',
+    'Body when all reviewers approved.'
+  ),
+  (
+    'email_subject_student_library_decision',
+    '[Cổng luận văn / Thesis Portal] Thư viện {{decisionVi}} luận văn | Library staff {{decisionEn}} your thesis',
+    'Student notice for library intake approve/reject. Placeholders: {{decisionVi}}, {{decisionEn}}, {{actorName}}, {{reason}}, {{title}}, {{studentName}}, {{portalUrl}}'
+  ),
+  (
+    'email_body_student_library_decision',
+    E'--- Tiếng Việt ---\nXin chào {{studentName}},\n\nCán bộ thư viện ({{actorName}}) {{decisionVi}} luận văn của bạn.\n\nTên đề tài: {{title}}\n{{reasonBlock}}\n{{portalUrl}}\n\n--- English ---\nHello {{studentName}},\n\nLibrary staff ({{actorName}}) has {{decisionEn}} your thesis.\n\nTitle: {{title}}\n{{reasonBlock}}\n{{portalUrl}}\n\n— Cổng luận văn / Thesis Portal',
+    'Body for library staff decision.'
+  ),
+  (
+    'email_subject_student_director_decision',
+    '[Cổng luận văn / Thesis Portal] Giám đốc thư viện {{decisionVi}} luận văn | The library director {{decisionEn}} your thesis',
+    'Student notice for director archive (accept) or reject. Placeholders: {{decisionVi}}, {{decisionEn}}, {{actorName}}, {{reason}}, {{title}}, {{studentName}}, {{portalUrl}}'
+  ),
+  (
+    'email_body_student_director_decision',
+    E'--- Tiếng Việt ---\nXin chào {{studentName}},\n\nGiám đốc thư viện ({{actorName}}) {{decisionVi}} luận văn của bạn.\n\nTên đề tài: {{title}}\n{{reasonBlock}}\n{{portalUrl}}\n\n--- English ---\nHello {{studentName}},\n\nThe library director ({{actorName}}) has {{decisionEn}} your thesis.\n\nTitle: {{title}}\n{{reasonBlock}}\n{{portalUrl}}\n\n— Cổng luận văn / Thesis Portal',
+    'Body for director decision.'
+  )
 ON CONFLICT (key) DO NOTHING;
 
 -- -----------------------------------------------------------------------------
--- Seed: HCMUT archive (university, faculties, semesters, open submission periods)
+-- Seed: submission form fields
 -- -----------------------------------------------------------------------------
 
-INSERT INTO universities (id, code, name, status) VALUES
-  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa0001', 'HCMUT', 'Trường Đại học Bách khoa TP.HCM', 'active')
-ON CONFLICT (code) DO NOTHING;
-
-INSERT INTO faculties (id, university_id, code, name, status, dspace_community_id, dspace_sync_status) VALUES
-  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0001', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa0001', 'CIVIL', 'CIVIL ENGINEERING', 'active', 'dev-community-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0001', 'synced'),
-  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0002', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa0001', 'GEOPE', 'GEOLOGY AND PETROLEUM ENGINEERING', 'active', 'dev-community-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0002', 'synced'),
-  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0003', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa0001', 'APPLSCI', 'APPLIED SCIENCE', 'active', 'dev-community-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0003', 'synced'),
-  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0004', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa0001', 'MECH', 'MECHANICAL ENGINEERING', 'active', 'dev-community-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0004', 'synced'),
-  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0005', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa0001', 'MATTECH', 'MATERIAL TECHNOLOGY', 'active', 'dev-community-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0005', 'synced'),
-  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0006', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa0001', 'TRANSP', 'TRANSPORTATION ENGINEERING', 'active', 'dev-community-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0006', 'synced'),
-  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0007', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa0001', 'CSE', 'COMPUTER SCIENCE AND ENGINEERING', 'active', 'dev-community-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0007', 'synced'),
-  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0008', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa0001', 'CHEM', 'CHEMICAL ENGINEERING', 'active', 'dev-community-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0008', 'synced'),
-  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0009', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa0001', 'SIM', 'SCHOOL OF INDUSTRIAL MANAGEMENT', 'active', 'dev-community-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0009', 'synced'),
-  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0010', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa0001', 'ENR', 'ENVIRONMENT AND NATURAL RESOURCES', 'active', 'dev-community-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0010', 'synced'),
-  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0011', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa0001', 'EEE', 'ELECTRICAL AND ELECTRONICS ENGINEERING', 'active', 'dev-community-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0011', 'synced')
-ON CONFLICT (university_id, code) DO UPDATE
-  SET name = EXCLUDED.name,
-      status = 'active',
-      dspace_community_id = COALESCE(faculties.dspace_community_id, EXCLUDED.dspace_community_id),
-      dspace_sync_status = 'synced';
-
-INSERT INTO semesters (id, faculty_id, code, name, status, collection_name, dspace_collection_id, dspace_community_id, dspace_sync_status) VALUES
-  ('cccccccc-cccc-cccc-cccc-cccccccc0001', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0001', '2025-1', 'Semester 1 — 2025', 'active', 'Luận văn – 2025-1', 'dev-collection-cccccccc-cccc-cccc-cccc-cccccccc0001', 'dev-semester-cccccccc-cccc-cccc-cccc-cccccccc0001', 'synced'),
-  ('cccccccc-cccc-cccc-cccc-cccccccc0002', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0002', '2025-1', 'Semester 1 — 2025', 'active', 'Luận văn – 2025-1', 'dev-collection-cccccccc-cccc-cccc-cccc-cccccccc0002', 'dev-semester-cccccccc-cccc-cccc-cccc-cccccccc0002', 'synced'),
-  ('cccccccc-cccc-cccc-cccc-cccccccc0003', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0003', '2025-1', 'Semester 1 — 2025', 'active', 'Luận văn – 2025-1', 'dev-collection-cccccccc-cccc-cccc-cccc-cccccccc0003', 'dev-semester-cccccccc-cccc-cccc-cccc-cccccccc0003', 'synced'),
-  ('cccccccc-cccc-cccc-cccc-cccccccc0004', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0004', '2025-1', 'Semester 1 — 2025', 'active', 'Luận văn – 2025-1', 'dev-collection-cccccccc-cccc-cccc-cccc-cccccccc0004', 'dev-semester-cccccccc-cccc-cccc-cccc-cccccccc0004', 'synced'),
-  ('cccccccc-cccc-cccc-cccc-cccccccc0005', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0005', '2025-1', 'Semester 1 — 2025', 'active', 'Luận văn – 2025-1', 'dev-collection-cccccccc-cccc-cccc-cccc-cccccccc0005', 'dev-semester-cccccccc-cccc-cccc-cccc-cccccccc0005', 'synced'),
-  ('cccccccc-cccc-cccc-cccc-cccccccc0006', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0006', '2025-1', 'Semester 1 — 2025', 'active', 'Luận văn – 2025-1', 'dev-collection-cccccccc-cccc-cccc-cccc-cccccccc0006', 'dev-semester-cccccccc-cccc-cccc-cccc-cccccccc0006', 'synced'),
-  ('cccccccc-cccc-cccc-cccc-cccccccc0007', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0007', '2025-1', 'Semester 1 — 2025', 'active', 'Luận văn – 2025-1', 'dev-collection-cccccccc-cccc-cccc-cccc-cccccccc0007', 'dev-semester-cccccccc-cccc-cccc-cccc-cccccccc0007', 'synced'),
-  ('cccccccc-cccc-cccc-cccc-cccccccc0008', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0008', '2025-1', 'Semester 1 — 2025', 'active', 'Luận văn – 2025-1', 'dev-collection-cccccccc-cccc-cccc-cccc-cccccccc0008', 'dev-semester-cccccccc-cccc-cccc-cccc-cccccccc0008', 'synced'),
-  ('cccccccc-cccc-cccc-cccc-cccccccc0009', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0009', '2025-1', 'Semester 1 — 2025', 'active', 'Luận văn – 2025-1', 'dev-collection-cccccccc-cccc-cccc-cccc-cccccccc0009', 'dev-semester-cccccccc-cccc-cccc-cccc-cccccccc0009', 'synced'),
-  ('cccccccc-cccc-cccc-cccc-cccccccc0010', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0010', '2025-1', 'Semester 1 — 2025', 'active', 'Luận văn – 2025-1', 'dev-collection-cccccccc-cccc-cccc-cccc-cccccccc0010', 'dev-semester-cccccccc-cccc-cccc-cccc-cccccccc0010', 'synced'),
-  ('cccccccc-cccc-cccc-cccc-cccccccc0011', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0011', '2025-1', 'Semester 1 — 2025', 'active', 'Luận văn – 2025-1', 'dev-collection-cccccccc-cccc-cccc-cccc-cccccccc0011', 'dev-semester-cccccccc-cccc-cccc-cccc-cccccccc0011', 'synced')
-ON CONFLICT (faculty_id, code) DO NOTHING;
-
-INSERT INTO submission_periods (id, faculty_id, semester_id, name, opens_at, closes_at, status, allow_resubmit) VALUES
-  ('dddddddd-dddd-dddd-dddd-dddddddd0001', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0001', 'cccccccc-cccc-cccc-cccc-cccccccc0001', 'Thesis deposit — HK1/2025 — Civil Engineering', NOW() - INTERVAL '7 days', NOW() + INTERVAL '90 days', 'open', TRUE),
-  ('dddddddd-dddd-dddd-dddd-dddddddd0002', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0002', 'cccccccc-cccc-cccc-cccc-cccccccc0002', 'Thesis deposit — HK1/2025 — Geology and Petroleum Engineering', NOW() - INTERVAL '7 days', NOW() + INTERVAL '90 days', 'open', TRUE),
-  ('dddddddd-dddd-dddd-dddd-dddddddd0003', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0003', 'cccccccc-cccc-cccc-cccc-cccccccc0003', 'Thesis deposit — HK1/2025 — Applied Science', NOW() - INTERVAL '7 days', NOW() + INTERVAL '90 days', 'open', TRUE),
-  ('dddddddd-dddd-dddd-dddd-dddddddd0004', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0004', 'cccccccc-cccc-cccc-cccc-cccccccc0004', 'Thesis deposit — HK1/2025 — Mechanical Engineering', NOW() - INTERVAL '7 days', NOW() + INTERVAL '90 days', 'open', TRUE),
-  ('dddddddd-dddd-dddd-dddd-dddddddd0005', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0005', 'cccccccc-cccc-cccc-cccc-cccccccc0005', 'Thesis deposit — HK1/2025 — Material Technology', NOW() - INTERVAL '7 days', NOW() + INTERVAL '90 days', 'open', TRUE),
-  ('dddddddd-dddd-dddd-dddd-dddddddd0006', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0006', 'cccccccc-cccc-cccc-cccc-cccccccc0006', 'Thesis deposit — HK1/2025 — Transportation Engineering', NOW() - INTERVAL '7 days', NOW() + INTERVAL '90 days', 'open', TRUE),
-  ('dddddddd-dddd-dddd-dddd-dddddddd0007', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0007', 'cccccccc-cccc-cccc-cccc-cccccccc0007', 'Thesis deposit — HK1/2025 — Computer Science and Engineering', NOW() - INTERVAL '7 days', NOW() + INTERVAL '90 days', 'open', TRUE),
-  ('dddddddd-dddd-dddd-dddd-dddddddd0008', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0008', 'cccccccc-cccc-cccc-cccc-cccccccc0008', 'Thesis deposit — HK1/2025 — Chemical Engineering', NOW() - INTERVAL '7 days', NOW() + INTERVAL '90 days', 'open', TRUE),
-  ('dddddddd-dddd-dddd-dddd-dddddddd0009', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0009', 'cccccccc-cccc-cccc-cccc-cccccccc0009', 'Thesis deposit — HK1/2025 — School of Industrial Management', NOW() - INTERVAL '7 days', NOW() + INTERVAL '90 days', 'open', TRUE),
-  ('dddddddd-dddd-dddd-dddd-dddddddd0010', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0010', 'cccccccc-cccc-cccc-cccc-cccccccc0010', 'Thesis deposit — HK1/2025 — Environment and Natural Resources', NOW() - INTERVAL '7 days', NOW() + INTERVAL '90 days', 'open', TRUE),
-  ('dddddddd-dddd-dddd-dddd-dddddddd0011', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb0011', 'cccccccc-cccc-cccc-cccc-cccccccc0011', 'Thesis deposit — HK1/2025 — Electrical and Electronics Engineering', NOW() - INTERVAL '7 days', NOW() + INTERVAL '90 days', 'open', TRUE)
-ON CONFLICT (id) DO NOTHING;
+INSERT INTO submission_form_fields (
+  id, field_key, label, dspace_path, input_type, required, enabled, sort_order,
+  options, default_value, storage, column_name, system_locked
+) VALUES
+  (
+    'a1000001-0001-4000-8000-000000000001',
+    'author',
+    'Author',
+    'dc.contributor.author',
+    'text',
+    TRUE,
+    TRUE,
+    10,
+    '[]'::jsonb,
+    '',
+    'column',
+    'author',
+    TRUE
+  ),
+  (
+    'a1000001-0001-4000-8000-000000000002',
+    'title',
+    'Title',
+    'dc.title',
+    'text',
+    TRUE,
+    TRUE,
+    20,
+    '[]'::jsonb,
+    '',
+    'column',
+    'title',
+    TRUE
+  ),
+  (
+    'a1000001-0001-4000-8000-000000000003',
+    'dateIssued',
+    'Date of Issue',
+    'dc.date.issued',
+    'text',
+    TRUE,
+    TRUE,
+    30,
+    '[]'::jsonb,
+    '',
+    'column',
+    'date_issued',
+    TRUE
+  ),
+  (
+    'a1000001-0001-4000-8000-000000000004',
+    'publisher',
+    'Publisher',
+    'dc.publisher',
+    'text',
+    TRUE,
+    TRUE,
+    40,
+    '[]'::jsonb,
+    'Ho Chi Minh City University of Technology',
+    'column',
+    'publisher',
+    TRUE
+  ),
+  (
+    'a1000001-0001-4000-8000-000000000005',
+    'documentType',
+    'Type',
+    'dc.type',
+    'select',
+    TRUE,
+    TRUE,
+    50,
+    '[{"value":"Thesis","label":"Thesis"},{"value":"Dissertation","label":"Dissertation"},{"value":"Graduation thesis","label":"Graduation thesis"}]'::jsonb,
+    'Thesis',
+    'column',
+    'document_type',
+    TRUE
+  ),
+  (
+    'a1000001-0001-4000-8000-000000000006',
+    'language',
+    'Language',
+    'dc.language.iso',
+    'select',
+    TRUE,
+    TRUE,
+    60,
+    '[{"value":"vie","label":"Vietnamese (vie)"},{"value":"eng","label":"English (eng)"}]'::jsonb,
+    'vie',
+    'column',
+    'language',
+    TRUE
+  ),
+  (
+    'a1000001-0001-4000-8000-000000000007',
+    'abstract',
+    'Abstract',
+    'dc.description.abstract',
+    'textarea',
+    TRUE,
+    TRUE,
+    70,
+    '[]'::jsonb,
+    '',
+    'column',
+    'abstract',
+    TRUE
+  ),
+  (
+    'a1000001-0001-4000-8000-000000000008',
+    'description',
+    'Description',
+    'dc.description',
+    'textarea',
+    TRUE,
+    TRUE,
+    80,
+    '[]'::jsonb,
+    '',
+    'column',
+    'description',
+    TRUE
+  )
+ON CONFLICT (field_key) DO NOTHING;

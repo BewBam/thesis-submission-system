@@ -102,7 +102,7 @@ export function assertStudentSubmissionCapability(
 }
 
 export function assertSubmissionOwnership(studentId: string, ownerId: string): void {
-  if (studentId !== ownerId) {
-    throw new ForbiddenException("Students can only manage their own submissions");
+  if (String(studentId) !== String(ownerId)) {
+    throw new ForbiddenException("Only the submitting student can manage this submission");
   }
 }

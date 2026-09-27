@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException
 } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
@@ -13,7 +14,9 @@ import * as path from "node:path";
 import type { PoolClient } from "pg";
 import { DatabaseError } from "pg";
 import type { JwtPayload } from "../auth/jwt.strategy";
+import { DspaceProvisionerService } from "../archive/dspace-provisioner.service";
 import { SubmissionPeriodsService } from "../archive/submission-periods.service";
+import { WorkflowMailService } from "../mail/workflow-mail.service";
 import { UsersService } from "../users/users.service";
 import { createPgPool } from "../users/db-pool";
 import { CreateSubmissionDto } from "./dto/create-submission.dto";
@@ -23,7 +26,8 @@ import {
   normalizeThesisMetadata,
   THESIS_METADATA_SELECT
 } from "./submission-metadata";
-import { THESIS_MAX_FILE_SIZE_BYTES, THESIS_MAX_FILE_SIZE_MB } from "./submission-limits";
+import { SubmissionFormFieldsService } from "./submission-form-fields.service";
+import { THESIS_MAX_FILE_SIZE_BYTES, THESIS_MAX_FILE_SIZE_MB, isThesisPdfUpload } from "./submission-limits";
 import {
   assertStudentSubmissionCapability,
   assertSubmissionOwnership,
@@ -32,7 +36,6 @@ import {
 } from "./submission-student-access";
 
 const uploadsRoot = path.join(process.cwd(), "uploads", "submissions");
-const acceptedPdfMimeTypes = ["application/pdf"];
 
 type UploadedFile = {
   originalname: string;
@@ -44,14 +47,64 @@ type UploadedFile = {
 @Injectable()
 export class SubmissionsService {
   private readonly db = createPgPool();
+  private readonly logger = new Logger(SubmissionsService.name);
 
   constructor(
     private readonly usersService: UsersService,
-    private readonly submissionPeriodsService: SubmissionPeriodsService
+    private readonly submissionPeriodsService: SubmissionPeriodsService,
+    private readonly dspaceProvisioner: DspaceProvisionerService,
+    private readonly formFieldsService: SubmissionFormFieldsService,
+    private readonly workflowMail: WorkflowMailService
   ) {}
 
+  private isAdminActor(actor: JwtPayload): boolean {
+    return actor.role === "admin";
+  }
+
+  private assertCanSubmitForStudent(actor: JwtPayload, studentId: string) {
+    if (this.isAdminActor(actor)) {
+      return;
+    }
+    if (actor.role !== "student") {
+      throw new BadRequestException("Only students can submit theses");
+    }
+    if (actor.sub !== studentId) {
+      throw new ForbiddenException("Students can only submit as themselves");
+    }
+  }
+
+  private assertPeriodMatchesStudentFaculty(student: { facultyId: string | null }, periodFacultyId: string) {
+    if (!student.facultyId) {
+      throw new BadRequestException("This student is not assigned to a faculty");
+    }
+    if (periodFacultyId !== student.facultyId) {
+      throw new BadRequestException("The submission period must belong to the student's faculty");
+    }
+  }
+
+  private parseExtraMetadata(raw: unknown): Record<string, string> {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return {};
+    }
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+      if (value === undefined || value === null) {
+        continue;
+      }
+      out[key] = String(value);
+    }
+    return out;
+  }
+
+  private async resolveConfigurableFields(
+    dto: Record<string, unknown>,
+    options: { required: boolean; existingExtra?: Record<string, string> }
+  ) {
+    return this.formFieldsService.resolveMetadataValues(dto, options);
+  }
+
   private async assertThesisFileValid(thesisFile: UploadedFile) {
-    if (!acceptedPdfMimeTypes.includes(thesisFile.mimetype)) {
+    if (!isThesisPdfUpload(thesisFile)) {
       throw new BadRequestException("Thesis file must be a PDF");
     }
     const fileStat = await stat(thesisFile.path);
@@ -65,30 +118,146 @@ export class SubmissionsService {
     studentId: string,
     options: { excludeSubmissionId?: string } = {}
   ) {
-    const result = await client.query<{ id: string; status: string }>(
-      `SELECT id::text AS id, status
-       FROM submissions
-       WHERE student_id = $1 AND status <> 'draft'
+    const { excludeSubmissionId } = options;
+    const result = await client.query<{ id: string; status: string; student_id: string }>(
+      `SELECT s.id::text AS id, s.status, s.student_id::text AS student_id
+       FROM submissions s
+       WHERE s.status <> 'draft'
+         AND (
+           s.student_id = $1
+           OR EXISTS (
+             SELECT 1
+             FROM submission_authors sa
+             WHERE sa.submission_id = s.id
+               AND sa.user_id = $1
+           )
+         )
+       ORDER BY s.created_at DESC`,
+      [studentId]
+    );
+
+    for (const row of result.rows) {
+      const isOwnSubmit = String(row.student_id) === String(studentId);
+      const status = row.status === "reject" ? "rejected" : row.status;
+
+      if (excludeSubmissionId && row.id === excludeSubmissionId) {
+        if (!isOwnSubmit) {
+          throw new BadRequestException(
+            "Only the submitting student can resubmit this thesis"
+          );
+        }
+        if (status === "rejected" || status === "approved") {
+          continue;
+        }
+        if (status === "reviewing") {
+          throw new BadRequestException(
+            "This thesis has already been submitted and cannot be submitted again unless it was rejected or returned for revision"
+          );
+        }
+        continue;
+      }
+
+      if (isOwnSubmit) {
+        throw new BadRequestException(
+          "You already have a submitted thesis. Only one thesis can be submitted per student"
+        );
+      }
+
+      throw new BadRequestException(
+        "You are already listed as an author on a submitted thesis, so you cannot submit another thesis"
+      );
+    }
+  }
+
+  /** Co-authors on a submitted thesis cannot create or keep a personal draft. */
+  private async assertStudentMayHaveDraft(client: PoolClient, studentId: string) {
+    const result = await client.query<{ id: string }>(
+      `SELECT s.id::text AS id
+       FROM submissions s
+       WHERE s.status <> 'draft'
+         AND (
+           s.student_id = $1
+           OR EXISTS (
+             SELECT 1
+             FROM submission_authors sa
+             WHERE sa.submission_id = s.id
+               AND sa.user_id = $1
+           )
+         )
        LIMIT 1`,
       [studentId]
     );
-    const existing = result.rows[0];
-    if (!existing) {
-      return;
-    }
-    const { excludeSubmissionId } = options;
-    if (excludeSubmissionId && existing.id === excludeSubmissionId) {
-      const status = existing.status === "reject" ? "rejected" : existing.status;
-      if (status === "rejected" || status === "approved") {
-        return;
-      }
+    if (result.rows[0]) {
       throw new BadRequestException(
-        "This thesis has already been submitted and cannot be submitted again unless it was rejected or returned for revision"
+        "You are already listed as an author on a submitted thesis, so you cannot create or edit a draft"
       );
     }
-    throw new BadRequestException(
-      "You already have a submitted thesis. You may save multiple drafts, but only one thesis can be submitted for review"
+  }
+
+  /** When a thesis is submitted, remove personal drafts of all listed authors (except the submission itself). */
+  private async deleteDraftsForAuthors(
+    client: PoolClient,
+    authorIds: string[],
+    excludeSubmissionId: string
+  ) {
+    if (authorIds.length === 0) {
+      return;
+    }
+    const drafts = await client.query<{ id: string }>(
+      `SELECT id::text AS id
+       FROM submissions
+       WHERE status = 'draft'
+         AND student_id = ANY($1::text[])
+         AND id <> $2::uuid`,
+      [authorIds, excludeSubmissionId]
     );
+    for (const draft of drafts.rows) {
+      const files = await client.query<{ file_url: string }>(
+        `SELECT file_url FROM submission_files WHERE submission_id = $1::uuid`,
+        [draft.id]
+      );
+      await client.query(`DELETE FROM submissions WHERE id = $1::uuid`, [draft.id]);
+      for (const file of files.rows) {
+        await this.deleteFileSilently(file.file_url);
+      }
+      try {
+        await unlink(path.join(uploadsRoot, draft.id));
+      } catch {
+        // directory may already be gone
+      }
+    }
+  }
+
+  /** Co-authors on a different non-draft thesis cannot be attached to another submission. */
+  private async assertAuthorsAvailableForSubmission(
+    client: PoolClient,
+    authorIds: string[],
+    excludeSubmissionId?: string
+  ) {
+    for (const authorId of authorIds) {
+      const result = await client.query<{ id: string }>(
+        `SELECT s.id::text AS id
+         FROM submissions s
+         WHERE s.status <> 'draft'
+           AND (
+             s.student_id = $1
+             OR EXISTS (
+               SELECT 1
+               FROM submission_authors sa
+               WHERE sa.submission_id = s.id
+                 AND sa.user_id = $1
+             )
+           )
+           AND ($2::uuid IS NULL OR s.id <> $2::uuid)
+         LIMIT 1`,
+        [authorId, excludeSubmissionId ?? null]
+      );
+      if (result.rows[0]) {
+        throw new BadRequestException(
+          "One or more selected authors are already on another submitted thesis and cannot be included"
+        );
+      }
+    }
   }
 
   private async loadReviewDecisions(client: PoolClient, submissionId: string): Promise<string[]> {
@@ -122,8 +291,14 @@ export class SubmissionsService {
 
   private rethrowSubmissionLimitError(error: unknown): never {
     if (error instanceof DatabaseError && error.code === "23505") {
+      const constraint = error.constraint || "";
+      if (constraint.includes("one_draft")) {
+        throw new BadRequestException(
+          "You already have a draft. Update your existing draft instead of creating a new one"
+        );
+      }
       throw new BadRequestException(
-        "You already have a submitted thesis. You may save multiple drafts, but only one thesis can be submitted for review"
+        "You already have a submitted thesis. Only one thesis can be in review at a time"
       );
     }
     throw error;
@@ -134,9 +309,24 @@ export class SubmissionsService {
     dto: CreateSubmissionDto,
     thesisFile: UploadedFile | undefined
   ) {
-    if (actor.role !== "student") {
-      throw new BadRequestException("Only students can submit theses");
+    this.assertCanSubmitForStudent(actor, dto.studentId);
+
+    const existingDraft = await this.db.query<{ id: string }>(
+      `SELECT id FROM submissions
+       WHERE student_id = $1 AND status = 'draft'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [dto.studentId]
+    );
+    if (existingDraft.rows[0]?.id) {
+      return this.submitSubmission(
+        actor,
+        existingDraft.rows[0].id,
+        dto as unknown as SaveDraftDto,
+        thesisFile
+      );
     }
+
     if (!thesisFile) {
       throw new BadRequestException("Thesis PDF is required");
     }
@@ -147,6 +337,17 @@ export class SubmissionsService {
       throw new BadRequestException("Invalid student account");
     }
     const meta = normalizeThesisMetadata(dto, student.username, { required: true });
+    const formValues = await this.resolveConfigurableFields(
+      { ...(dto.metadata || {}), ...dto, abstract: dto.abstract },
+      { required: true }
+    );
+    const dateIssued = formValues.columns.date_issued ?? meta.dateIssued;
+    const publisher = formValues.columns.publisher ?? meta.publisher;
+    const documentType = formValues.columns.document_type ?? meta.documentType;
+    const language = formValues.columns.language ?? meta.language;
+    const description = formValues.columns.description ?? meta.description;
+    const abstractText = formValues.columns.abstract ?? dto.abstract ?? "";
+    const extraMetadata = formValues.extra;
 
     const uniqueAuthorIds = Array.from(new Set(dto.authorIds));
     if (uniqueAuthorIds.length === 0) {
@@ -182,9 +383,10 @@ export class SubmissionsService {
       reviewerUsers.push(reviewerUser);
     }
 
-    const advisorSnapshot = reviewerUsers.map((user) => user.displayName || user.username).join("; ");
+    const reviewerSnapshot = reviewerUsers.map((user) => user.displayName || user.username).join("; ");
 
     const period = await this.submissionPeriodsService.resolveOpenPeriod(dto.submissionPeriodId);
+    this.assertPeriodMatchesStudentFaculty(student, period.facultyId);
 
     const submissionId = randomUUID();
     const targetDirectory = path.join(uploadsRoot, submissionId);
@@ -205,19 +407,21 @@ export class SubmissionsService {
       try {
         await client.query("BEGIN");
         await this.assertStudentMaySubmit(client, dto.studentId);
+        await this.assertAuthorsAvailableForSubmission(client, uniqueAuthorIds);
         await client.query(
           `INSERT INTO submissions (
-             id, title, author, advisor, abstract, keywords, student_id, advisor_id, status,
+             id, title, author, reviewer, abstract, keywords, student_id, status,
              submission_period_id, university_name, faculty_name, semester_name,
-             student_email, title_vi, title_en, thesis_advisors, major, thesis_year
+             student_email, title_vi, title_en, thesis_advisors, major, thesis_year,
+             date_issued, publisher, document_type, language, description, extra_metadata
            )
-           VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, 'reviewing', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'reviewing', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23::jsonb)`,
           [
             submissionId,
             meta.title,
             authorSnapshot,
-            advisorSnapshot,
-            dto.abstract,
+            reviewerSnapshot,
+            abstractText,
             "",
             dto.studentId,
             period.periodId,
@@ -229,12 +433,18 @@ export class SubmissionsService {
             meta.titleEn,
             meta.thesisAdvisors,
             meta.major,
-            meta.thesisYear
+            meta.thesisYear,
+            dateIssued,
+            publisher,
+            documentType,
+            language,
+            description,
+            JSON.stringify(extraMetadata)
           ]
         );
         await client.query(
           `INSERT INTO submission_events (id, submission_id, actor_id, actor_role, event_type, payload)
-           VALUES ($1, $2, $3, 'student', 'submitted', $4::jsonb)`,
+             VALUES ($1, $2, $3, $5, 'submitted', $4::jsonb)`,
           [
             randomUUID(),
             submissionId,
@@ -247,13 +457,20 @@ export class SubmissionsService {
               thesisAdvisors: meta.thesisAdvisors,
               major: meta.major,
               thesisYear: meta.thesisYear,
+              dateIssued: meta.dateIssued,
+              publisher: meta.publisher,
+              documentType: meta.documentType,
+              language: meta.language,
+              description: meta.description,
               authorIds: uniqueAuthorIds,
               reviewerIds: uniqueReviewerIds,
               submissionPeriodId: period.periodId,
               universityName: period.universityName,
               facultyName: period.facultyName,
-              semesterName: period.semesterName
-            })
+              semesterName: period.semesterName,
+              submittedOnBehalf: this.isAdminActor(actor) ? dto.studentId : undefined
+            }),
+            actor.role
           ]
         );
 
@@ -267,23 +484,9 @@ export class SubmissionsService {
           sortOrder += 1;
         }
 
-        sortOrder = 0;
-        for (const reviewerId of uniqueReviewerIds) {
-          await client.query(
-            `INSERT INTO submission_reviewers (submission_id, user_id, sort_order)
-             VALUES ($1, $2, $3)`,
-            [submissionId, reviewerId, sortOrder]
-          );
-          sortOrder += 1;
-        }
+        await this.replaceReviewers(client, submissionId, uniqueReviewerIds);
 
-        for (const reviewerId of uniqueReviewerIds) {
-          await client.query(
-            `INSERT INTO reviews (id, submission_id, reviewer_id, status, decision, comment)
-             VALUES ($1, $2, $3, 'pending', 'pending', NULL)`,
-            [randomUUID(), submissionId, reviewerId]
-          );
-        }
+        await this.deleteDraftsForAuthors(client, uniqueAuthorIds, submissionId);
 
         for (const file of savedFiles) {
           await client.query(
@@ -314,6 +517,13 @@ export class SubmissionsService {
       );
     }
 
+    this.workflowMail.notifySafely("reviewer_assigned", () =>
+      this.workflowMail.notifyReviewersOnSubmit(submissionId)
+    );
+    this.workflowMail.notifySafely("student_submitted", () =>
+      this.workflowMail.notifyStudentOnSubmitted(submissionId, false)
+    );
+
     return {
       id: submissionId,
       status: "reviewing"
@@ -321,11 +531,25 @@ export class SubmissionsService {
   }
 
   async saveDraft(actor: JwtPayload, dto: SaveDraftDto, thesisFile?: UploadedFile) {
-    if (actor.role !== "student") {
-      throw new BadRequestException("Only students can save drafts");
+    this.assertCanSubmitForStudent(actor, dto.studentId);
+
+    const lockClient = await this.db.connect();
+    try {
+      await this.assertStudentMayHaveDraft(lockClient, dto.studentId);
+    } finally {
+      lockClient.release();
     }
-    if (actor.sub !== dto.studentId) {
-      throw new ForbiddenException("Students can only save drafts for themselves");
+
+    const existingDraft = await this.db.query<{ id: string }>(
+      `SELECT id FROM submissions
+       WHERE student_id = $1 AND status = 'draft'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [dto.studentId]
+    );
+    const draftId = existingDraft.rows[0]?.id;
+    if (draftId) {
+      return this.updateDraft(actor, draftId, dto, thesisFile);
     }
 
     if (thesisFile) {
@@ -337,8 +561,19 @@ export class SubmissionsService {
       throw new BadRequestException("Invalid student account");
     }
     const meta = normalizeThesisMetadata(dto, student.username, { required: false });
+    const formValues = await this.resolveConfigurableFields(
+      { ...(dto.metadata || {}), ...dto, abstract: dto.abstract },
+      { required: false }
+    );
+    const dateIssued = formValues.columns.date_issued ?? meta.dateIssued;
+    const publisher = formValues.columns.publisher ?? meta.publisher;
+    const documentType = formValues.columns.document_type ?? meta.documentType;
+    const language = formValues.columns.language ?? meta.language;
+    const description = formValues.columns.description ?? meta.description;
+    const abstract = formValues.columns.abstract ?? dto.abstract?.trim() ?? "";
+    const extraMetadata = formValues.extra;
 
-    const { authorIds, authorSnapshot, reviewerIds, advisorSnapshot } = await this.resolveAuthorsAndReviewers(
+    const { authorIds, authorSnapshot, reviewerIds, reviewerSnapshot } = await this.resolveAuthorsAndReviewers(
       dto.studentId,
       dto.authorIds,
       dto.reviewerIds,
@@ -348,29 +583,29 @@ export class SubmissionsService {
     let periodContext: Awaited<ReturnType<SubmissionPeriodsService["resolveOpenPeriod"]>> | null = null;
     if (dto.submissionPeriodId) {
       periodContext = await this.submissionPeriodsService.resolveOpenPeriod(dto.submissionPeriodId);
+      this.assertPeriodMatchesStudentFaculty(student, periodContext.facultyId);
     }
 
     const submissionId = randomUUID();
     const targetDirectory = path.join(uploadsRoot, submissionId);
     await mkdir(targetDirectory, { recursive: true });
 
-    const abstract = dto.abstract?.trim() || "";
-
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
       await client.query(
         `INSERT INTO submissions (
-           id, title, author, advisor, abstract, keywords, student_id, advisor_id, status,
+           id, title, author, reviewer, abstract, keywords, student_id, status,
            submission_period_id, university_name, faculty_name, semester_name,
-           student_email, title_vi, title_en, thesis_advisors, major, thesis_year
+           student_email, title_vi, title_en, thesis_advisors, major, thesis_year,
+           date_issued, publisher, document_type, language, description, extra_metadata
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, 'draft', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23::jsonb)`,
         [
           submissionId,
           meta.title,
           authorSnapshot,
-          advisorSnapshot,
+          reviewerSnapshot,
           abstract,
           "",
           dto.studentId,
@@ -383,7 +618,13 @@ export class SubmissionsService {
           meta.titleEn,
           meta.thesisAdvisors,
           meta.major,
-          meta.thesisYear
+          meta.thesisYear,
+          dateIssued,
+          publisher,
+          documentType,
+          language,
+          description,
+          JSON.stringify(extraMetadata)
         ]
       );
 
@@ -396,7 +637,7 @@ export class SubmissionsService {
 
       await client.query(
         `INSERT INTO submission_events (id, submission_id, actor_id, actor_role, event_type, payload)
-         VALUES ($1, $2, $3, 'student', 'draft_saved', $4::jsonb)`,
+         VALUES ($1, $2, $3, $5, 'draft_saved', $4::jsonb)`,
         [
           randomUUID(),
           submissionId,
@@ -404,14 +645,15 @@ export class SubmissionsService {
           JSON.stringify({
             title: meta.title,
             submissionPeriodId: periodContext?.periodId ?? null
-          })
+          }),
+          actor.role
         ]
       );
 
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
-      throw error;
+      this.rethrowSubmissionLimitError(error);
     } finally {
       client.release();
     }
@@ -425,7 +667,7 @@ export class SubmissionsService {
     dto: SaveDraftDto,
     thesisFile?: UploadedFile
   ) {
-    if (actor.role !== "student") {
+    if (actor.role !== "student" && !this.isAdminActor(actor)) {
       throw new ForbiddenException();
     }
     if (thesisFile) {
@@ -448,9 +690,16 @@ export class SubmissionsService {
         thesis_advisors: string;
         major: string;
         thesis_year: string;
+        date_issued: string;
+        publisher: string;
+        document_type: string;
+        language: string;
+        description: string;
+        extra_metadata: unknown;
       }>(
         `SELECT student_id, status, submission_period_id, title, abstract,
-                student_email, title_vi, title_en, thesis_advisors, major, thesis_year
+                student_email, title_vi, title_en, thesis_advisors, major, thesis_year,
+                date_issued, publisher, document_type, language, description, extra_metadata
          FROM submissions WHERE id = $1::uuid LIMIT 1 FOR UPDATE`,
         [submissionId]
       );
@@ -458,8 +707,15 @@ export class SubmissionsService {
       if (!row) {
         throw new NotFoundException("Submission not found");
       }
+      if (row.status === "draft") {
+        await this.assertStudentMayHaveDraft(client, row.student_id);
+      }
       currentStatus = row.status;
-      await this.assertStudentSubmissionAction(client, submissionId, actor.sub, "edit");
+      this.assertCanSubmitForStudent(actor, row.student_id);
+      if (dto.studentId && dto.studentId !== row.student_id) {
+        throw new BadRequestException("Cannot change the submitting student");
+      }
+      await this.assertStudentSubmissionAction(client, submissionId, row.student_id, "edit");
 
       const student = await this.usersService.findById(row.student_id);
       if (!student) {
@@ -475,12 +731,17 @@ export class SubmissionsService {
           title: row.title,
           thesisAdvisors: row.thesis_advisors,
           major: row.major,
-          thesisYear: row.thesis_year
+          thesisYear: row.thesis_year,
+          dateIssued: row.date_issued,
+          publisher: row.publisher,
+          documentType: row.document_type,
+          language: row.language,
+          description: row.description
         },
         { required: false }
       );
 
-      const { authorIds, authorSnapshot, reviewerIds, advisorSnapshot } = await this.resolveAuthorsAndReviewers(
+      const { authorIds, authorSnapshot, reviewerIds, reviewerSnapshot } = await this.resolveAuthorsAndReviewers(
         row.student_id,
         dto.authorIds,
         dto.reviewerIds,
@@ -508,12 +769,12 @@ export class SubmissionsService {
               university_name: string;
               faculty_name: string;
               semester_name: string;
+              faculty_id: string;
             }>(
-              `SELECT u.name AS university_name, f.name AS faculty_name, s.name AS semester_name
+              `SELECT 'Trường Đại học Bách khoa TP.HCM' AS university_name, f.id::text AS faculty_id, f.name AS faculty_name, s.name AS semester_name
                FROM submission_periods sp
-               JOIN faculties f ON f.id = sp.faculty_id
                JOIN semesters s ON s.id = sp.semester_id
-               JOIN universities u ON u.id = f.university_id
+               JOIN faculties f ON f.id = s.faculty_id
                WHERE sp.id = $1::uuid
                LIMIT 1`,
               [periodId]
@@ -523,7 +784,7 @@ export class SubmissionsService {
               ? {
                   periodId,
                   periodName: "",
-                  facultyId: "",
+                  facultyId: m.faculty_id,
                   facultyCode: "",
                   facultyName: m.faculty_name,
                   semesterId: "",
@@ -537,14 +798,27 @@ export class SubmissionsService {
           }
         }
       }
+      if (periodContext?.facultyId) {
+        this.assertPeriodMatchesStudentFaculty(student, periodContext.facultyId);
+      }
 
-      const abstract = dto.abstract?.trim() ?? row.abstract ?? "";
+      const formValues = await this.resolveConfigurableFields(
+        { ...(dto.metadata || {}), ...dto, abstract: dto.abstract ?? row.abstract },
+        { required: false, existingExtra: this.parseExtraMetadata(row.extra_metadata) }
+      );
+      const dateIssued = formValues.columns.date_issued ?? meta.dateIssued;
+      const publisher = formValues.columns.publisher ?? meta.publisher;
+      const documentType = formValues.columns.document_type ?? meta.documentType;
+      const language = formValues.columns.language ?? meta.language;
+      const description = formValues.columns.description ?? meta.description;
+      const abstract = formValues.columns.abstract ?? dto.abstract?.trim() ?? row.abstract ?? "";
+      const extraMetadata = formValues.extra;
 
       await client.query(
         `UPDATE submissions
          SET title = $1,
              author = $2,
-             advisor = $3,
+             reviewer = $3,
              abstract = $4,
              submission_period_id = COALESCE($5, submission_period_id),
              university_name = COALESCE($6, university_name),
@@ -555,12 +829,18 @@ export class SubmissionsService {
              title_en = $11,
              thesis_advisors = $12,
              major = $13,
-             thesis_year = $14
-         WHERE id = $15::uuid`,
+             thesis_year = $14,
+             date_issued = $15,
+             publisher = $16,
+             document_type = $17,
+             language = $18,
+             description = $19,
+             extra_metadata = $20::jsonb
+         WHERE id = $21::uuid`,
         [
           meta.title,
           authorSnapshot,
-          advisorSnapshot,
+          reviewerSnapshot,
           abstract,
           periodContext?.periodId ?? null,
           periodContext?.universityName ?? null,
@@ -572,6 +852,12 @@ export class SubmissionsService {
           meta.thesisAdvisors,
           meta.major,
           meta.thesisYear,
+          dateIssued,
+          publisher,
+          documentType,
+          language,
+          description,
+          JSON.stringify(extraMetadata),
           submissionId
         ]
       );
@@ -587,8 +873,8 @@ export class SubmissionsService {
 
       await client.query(
         `INSERT INTO submission_events (id, submission_id, actor_id, actor_role, event_type, payload)
-         VALUES ($1, $2, $3, 'student', 'draft_updated', $4::jsonb)`,
-        [randomUUID(), submissionId, actor.sub, JSON.stringify({ title: meta.title })]
+         VALUES ($1, $2, $3, $5, 'draft_updated', $4::jsonb)`,
+        [randomUUID(), submissionId, actor.sub, JSON.stringify({ title: meta.title }), actor.role]
       );
 
       await client.query("COMMIT");
@@ -608,13 +894,14 @@ export class SubmissionsService {
     dto: SaveDraftDto,
     thesisFile?: UploadedFile
   ) {
-    if (actor.role !== "student") {
+    if (actor.role !== "student" && !this.isAdminActor(actor)) {
       throw new ForbiddenException();
     }
     if (thesisFile) {
       await this.assertThesisFileValid(thesisFile);
     }
 
+    let resubmit = false;
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
@@ -630,9 +917,16 @@ export class SubmissionsService {
         thesis_advisors: string;
         major: string;
         thesis_year: string;
+        date_issued: string;
+        publisher: string;
+        document_type: string;
+        language: string;
+        description: string;
+        extra_metadata: unknown;
       }>(
         `SELECT student_id, status, submission_period_id, title, abstract,
-                student_email, title_vi, title_en, thesis_advisors, major, thesis_year
+                student_email, title_vi, title_en, thesis_advisors, major, thesis_year,
+                date_issued, publisher, document_type, language, description, extra_metadata
          FROM submissions WHERE id = $1::uuid LIMIT 1 FOR UPDATE`,
         [submissionId]
       );
@@ -640,10 +934,12 @@ export class SubmissionsService {
       if (!row) {
         throw new NotFoundException("Submission not found");
       }
-      if (row.student_id !== actor.sub) {
-        throw new ForbiddenException("Students can only submit their own thesis");
+      this.assertCanSubmitForStudent(actor, row.student_id);
+      if (dto.studentId && dto.studentId !== row.student_id) {
+        throw new BadRequestException("Cannot change the submitting student");
       }
-      await this.assertStudentSubmissionAction(client, submissionId, actor.sub, "submit");
+      resubmit = row.status === "rejected" || row.status === "reject" || row.status === "approved";
+      await this.assertStudentSubmissionAction(client, submissionId, row.student_id, "submit");
 
       if (row.status === "draft") {
         await this.assertStudentMaySubmit(client, row.student_id);
@@ -667,14 +963,35 @@ export class SubmissionsService {
           title: row.title,
           thesisAdvisors: row.thesis_advisors,
           major: row.major,
-          thesisYear: row.thesis_year
+          thesisYear: row.thesis_year,
+          dateIssued: row.date_issued,
+          publisher: row.publisher,
+          documentType: row.document_type,
+          language: row.language,
+          description: row.description
         },
         { required: true }
       );
-      const abstract = dto.abstract?.trim() || row.abstract;
-      if (!abstract?.trim()) {
-        throw new BadRequestException("Abstract is required");
-      }
+      const formValues = await this.resolveConfigurableFields(
+        {
+          ...(dto.metadata || {}),
+          ...dto,
+          abstract: dto.abstract ?? row.abstract,
+          dateIssued: dto.dateIssued ?? row.date_issued,
+          publisher: dto.publisher ?? row.publisher,
+          documentType: dto.documentType ?? row.document_type,
+          language: dto.language ?? row.language,
+          description: dto.description ?? row.description
+        },
+        { required: true, existingExtra: this.parseExtraMetadata(row.extra_metadata) }
+      );
+      const dateIssued = formValues.columns.date_issued ?? meta.dateIssued;
+      const publisher = formValues.columns.publisher ?? meta.publisher;
+      const documentType = formValues.columns.document_type ?? meta.documentType;
+      const language = formValues.columns.language ?? meta.language;
+      const description = formValues.columns.description ?? meta.description;
+      const abstract = formValues.columns.abstract ?? (dto.abstract?.trim() || row.abstract);
+      const extraMetadata = formValues.extra;
 
       const periodId = dto.submissionPeriodId ?? row.submission_period_id;
       if (!periodId) {
@@ -687,14 +1004,14 @@ export class SubmissionsService {
       } else if (row.status === "rejected" || row.status === "reject" || row.status === "approved") {
         const meta = await client.query<{
           university_name: string;
+          faculty_id: string;
           faculty_name: string;
           semester_name: string;
         }>(
-          `SELECT u.name AS university_name, f.name AS faculty_name, s.name AS semester_name
+          `SELECT 'Trường Đại học Bách khoa TP.HCM' AS university_name, f.id::text AS faculty_id, f.name AS faculty_name, s.name AS semester_name
            FROM submission_periods sp
-           JOIN faculties f ON f.id = sp.faculty_id
            JOIN semesters s ON s.id = sp.semester_id
-           JOIN universities u ON u.id = f.university_id
+           JOIN faculties f ON f.id = s.faculty_id
            WHERE sp.id = $1::uuid
            LIMIT 1`,
           [periodId]
@@ -706,7 +1023,7 @@ export class SubmissionsService {
         periodContext = {
           periodId,
           periodName: "",
-          facultyId: "",
+          facultyId: m.faculty_id,
           facultyCode: "",
           facultyName: m.faculty_name,
           semesterId: "",
@@ -719,13 +1036,16 @@ export class SubmissionsService {
       } else {
         throw new BadRequestException("This thesis cannot be submitted in its current state");
       }
+      this.assertPeriodMatchesStudentFaculty(student, periodContext.facultyId);
 
-      const { authorIds, authorSnapshot, reviewerIds, advisorSnapshot } = await this.resolveAuthorsAndReviewers(
+      const { authorIds, authorSnapshot, reviewerIds, reviewerSnapshot } = await this.resolveAuthorsAndReviewers(
         row.student_id,
         dto.authorIds,
         dto.reviewerIds,
         { reviewersRequired: true }
       );
+
+      await this.assertAuthorsAvailableForSubmission(client, authorIds, submissionId);
 
       const thesisExists = await client.query(
         `SELECT 1 FROM submission_files WHERE submission_id = $1::uuid AND file_type = 'thesis' LIMIT 1`,
@@ -739,7 +1059,7 @@ export class SubmissionsService {
         `UPDATE submissions
          SET title = $1,
              author = $2,
-             advisor = $3,
+             reviewer = $3,
              abstract = $4,
              status = 'reviewing',
              submission_period_id = $5,
@@ -751,12 +1071,18 @@ export class SubmissionsService {
              title_en = $11,
              thesis_advisors = $12,
              major = $13,
-             thesis_year = $14
-         WHERE id = $15::uuid`,
+             thesis_year = $14,
+             date_issued = $15,
+             publisher = $16,
+             document_type = $17,
+             language = $18,
+             description = $19,
+             extra_metadata = $20::jsonb
+         WHERE id = $21::uuid`,
         [
           meta.title,
           authorSnapshot,
-          advisorSnapshot,
+          reviewerSnapshot,
           abstract,
           periodContext.periodId,
           periodContext.universityName,
@@ -768,6 +1094,12 @@ export class SubmissionsService {
           meta.thesisAdvisors,
           meta.major,
           meta.thesisYear,
+          dateIssued,
+          publisher,
+          documentType,
+          language,
+          description,
+          JSON.stringify(extraMetadata),
           submissionId
         ]
       );
@@ -775,24 +1107,17 @@ export class SubmissionsService {
       await this.replaceAuthors(client, submissionId, authorIds);
       await this.replaceReviewers(client, submissionId, reviewerIds);
 
+      await this.deleteDraftsForAuthors(client, authorIds, submissionId);
+
       if (thesisFile) {
         const targetDirectory = path.join(uploadsRoot, submissionId);
         await mkdir(targetDirectory, { recursive: true });
         await this.replaceThesisFile(client, submissionId, thesisFile, targetDirectory);
       }
 
-      await client.query(`DELETE FROM reviews WHERE submission_id = $1::uuid`, [submissionId]);
-      for (const reviewerId of reviewerIds) {
-        await client.query(
-          `INSERT INTO reviews (id, submission_id, reviewer_id, status, decision, comment)
-           VALUES ($1, $2, $3, 'pending', 'pending', NULL)`,
-          [randomUUID(), submissionId, reviewerId]
-        );
-      }
-
       await client.query(
         `INSERT INTO submission_events (id, submission_id, actor_id, actor_role, event_type, payload)
-         VALUES ($1, $2, $3, 'student', 'submitted', $4::jsonb)`,
+         VALUES ($1, $2, $3, $5, 'submitted', $4::jsonb)`,
         [
           randomUUID(),
           submissionId,
@@ -808,8 +1133,10 @@ export class SubmissionsService {
             authorIds,
             reviewerIds,
             submissionPeriodId: periodContext.periodId,
-            fromStatus: row.status
-          })
+            fromStatus: row.status,
+            submittedOnBehalf: this.isAdminActor(actor) ? row.student_id : undefined
+          }),
+          actor.role
         ]
       );
 
@@ -821,11 +1148,22 @@ export class SubmissionsService {
       client.release();
     }
 
+    this.workflowMail.notifySafely("reviewer_assigned", () =>
+      this.workflowMail.notifyReviewersOnSubmit(submissionId)
+    );
+    this.workflowMail.notifySafely("student_submitted", () =>
+      this.workflowMail.notifyStudentOnSubmitted(submissionId, resubmit)
+    );
+
     return { id: submissionId, status: "reviewing" };
   }
 
   async deleteSubmission(actor: JwtPayload, submissionId: string) {
-    if (actor.role !== "student") {
+    if (this.canStaffDeleteSubmission(actor.role)) {
+      return this.deleteSubmissionAsStaff(actor, submissionId);
+    }
+
+    if (actor.role !== "student" && !this.isAdminActor(actor)) {
       throw new ForbiddenException();
     }
 
@@ -859,18 +1197,91 @@ export class SubmissionsService {
     return { ok: true };
   }
 
+  private canStaffDeleteSubmission(role: string): boolean {
+    return role === "admin" || role === "library_staff" || role === "director";
+  }
+
+  private async deleteSubmissionAsStaff(actor: JwtPayload, submissionId: string) {
+    const existing = await this.db.query<{ dspace_item_id: string | null; status: string }>(
+      `SELECT dspace_item_id, status FROM submissions WHERE id = $1::uuid LIMIT 1`,
+      [submissionId]
+    );
+    const row = existing.rows[0];
+    if (!row) {
+      throw new NotFoundException("Submission not found");
+    }
+
+    let dspaceDeleted = false;
+    let dspaceDeleteWarning = false;
+    const dspaceItemId = row.dspace_item_id;
+    if (dspaceItemId && !dspaceItemId.startsWith("dev-item-")) {
+      try {
+        await this.dspaceProvisioner.deleteItem(dspaceItemId);
+        dspaceDeleted = true;
+      } catch (error) {
+        dspaceDeleteWarning = true;
+        this.logger.warn(
+          `DSpace item ${dspaceItemId} delete failed for submission ${submissionId}: ${
+            error instanceof Error ? error.message : error
+          }`
+        );
+      }
+    }
+
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+      const files = await client.query<{ file_url: string }>(
+        `SELECT file_url FROM submission_files WHERE submission_id = $1::uuid`,
+        [submissionId]
+      );
+      await client.query(`DELETE FROM submissions WHERE id = $1::uuid`, [submissionId]);
+      await client.query("COMMIT");
+
+      for (const file of files.rows) {
+        await this.deleteFileSilently(file.file_url);
+      }
+      try {
+        await unlink(path.join(uploadsRoot, submissionId));
+      } catch {
+        // directory may already be gone
+      }
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    return {
+      ok: true,
+      dspaceDeleted,
+      dspaceDeleteWarning,
+      status: row.status
+    };
+  }
+
   async revertSubmissionToDraft(actor: JwtPayload, submissionId: string) {
-    if (actor.role !== "student") {
+    if (actor.role !== "student" && !this.isAdminActor(actor)) {
       throw new ForbiddenException();
     }
 
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
+      const existing = await client.query<{ student_id: string; status: string }>(
+        `SELECT student_id, status FROM submissions WHERE id = $1::uuid LIMIT 1 FOR UPDATE`,
+        [submissionId]
+      );
+      const row = existing.rows[0];
+      if (!row) {
+        throw new NotFoundException("Submission not found");
+      }
+      this.assertCanSubmitForStudent(actor, row.student_id);
       const { status } = await this.assertStudentSubmissionAction(
         client,
         submissionId,
-        actor.sub,
+        row.student_id,
         "revert_draft"
       );
 
@@ -878,12 +1289,13 @@ export class SubmissionsService {
       await client.query(`DELETE FROM reviews WHERE submission_id = $1::uuid`, [submissionId]);
       await client.query(
         `INSERT INTO submission_events (id, submission_id, actor_id, actor_role, event_type, payload)
-         VALUES ($1, $2, $3, 'student', 'reverted_to_draft', $4::jsonb)`,
+         VALUES ($1, $2, $3, $5, 'reverted_to_draft', $4::jsonb)`,
         [
           randomUUID(),
           submissionId,
           actor.sub,
-          JSON.stringify({ fromStatus: status })
+          JSON.stringify({ fromStatus: status }),
+          actor.role
         ]
       );
       await client.query(
@@ -948,7 +1360,7 @@ export class SubmissionsService {
       authorIds: uniqueAuthorIds,
       authorSnapshot: authorUsers.map((user) => user.displayName || user.username).join("; "),
       reviewerIds: uniqueReviewerIds,
-      advisorSnapshot: reviewerUsers.map((user) => user.displayName || user.username).join("; ")
+      reviewerSnapshot: reviewerUsers.map((user) => user.displayName || user.username).join("; ")
     };
   }
 
@@ -973,12 +1385,13 @@ export class SubmissionsService {
     submissionId: string,
     reviewerIds: string[]
   ) {
-    await client.query(`DELETE FROM submission_reviewers WHERE submission_id = $1::uuid`, [submissionId]);
+    await client.query(`DELETE FROM reviews WHERE submission_id = $1::uuid`, [submissionId]);
     let sortOrder = 0;
     for (const reviewerId of reviewerIds) {
       await client.query(
-        `INSERT INTO submission_reviewers (submission_id, user_id, sort_order) VALUES ($1::uuid, $2, $3)`,
-        [submissionId, reviewerId, sortOrder]
+        `INSERT INTO reviews (id, submission_id, reviewer_id, decision, comment, sort_order)
+         VALUES ($1::uuid, $2::uuid, $3, 'pending', NULL, $4)`,
+        [randomUUID(), submissionId, reviewerId, sortOrder]
       );
       sortOrder += 1;
     }
@@ -1015,21 +1428,23 @@ export class SubmissionsService {
               COALESCE((
                 SELECT string_agg(u.display_name, '; ' ORDER BY sa.sort_order)
                 FROM submission_authors sa
-                JOIN users u ON u.id = sa.user_id
+                JOIN users u ON u.username = sa.user_id
                 WHERE sa.submission_id = s.id
               ), s.author) AS author,
               COALESCE((
-                SELECT string_agg(rv.display_name, '; ' ORDER BY sr.sort_order)
-                FROM submission_reviewers sr
-                JOIN users rv ON rv.id = sr.user_id
-                WHERE sr.submission_id = s.id
-              ), s.advisor) AS advisor,
+                SELECT string_agg(rv.display_name, '; ' ORDER BY r.sort_order)
+                FROM reviews r
+                JOIN users rv ON rv.username = r.reviewer_id
+                WHERE r.submission_id = s.id
+              ), s.reviewer) AS reviewer,
               s.abstract,
               s.keywords,
               s.university_name,
               s.faculty_name,
               s.semester_name,
               s.submission_period_id,
+              sem.faculty_id::text AS faculty_id,
+              sp.semester_id::text AS semester_id,
               ${THESIS_METADATA_SELECT},
               s.status,
               s.created_at,
@@ -1039,9 +1454,9 @@ export class SubmissionsService {
                 WHERE sa_vis.submission_id = s.id
               ), '[]'::json) AS author_user_ids,
               COALESCE((
-                SELECT json_agg(sr_vis.user_id::text ORDER BY sr_vis.sort_order)
-                FROM submission_reviewers sr_vis
-                WHERE sr_vis.submission_id = s.id
+                SELECT json_agg(r_vis.reviewer_id::text ORDER BY r_vis.sort_order)
+                FROM reviews r_vis
+                WHERE r_vis.submission_id = s.id
               ), '[]'::json) AS reviewer_user_ids,
               s.student_id AS submitter_id,
               COALESCE(su.display_name, su.username) AS submitter,
@@ -1054,16 +1469,16 @@ export class SubmissionsService {
                       'reviewer', COALESCE(u2.display_name, u2.username),
                       'username', u2.username,
                       'decision', r2.decision,
-                      'status', r2.status,
                       'comment', r2.comment,
-                      'decidedAt', r2.decided_at
+                      'decidedAt', r2.decided_at,
+                      'sortOrder', r2.sort_order
                     )
-                    ORDER BY COALESCE(u2.display_name, u2.username)
+                    ORDER BY r2.sort_order, COALESCE(u2.display_name, u2.username)
                   ),
                   '[]'::json
                 )
                 FROM reviews r2
-                JOIN users u2 ON u2.id::text = r2.reviewer_id::text
+                JOIN users u2 ON u2.username = r2.reviewer_id
                 WHERE r2.submission_id = s.id
               ) AS reviews,
               (
@@ -1083,7 +1498,7 @@ export class SubmissionsService {
                   '[]'::json
                 )
                 FROM submission_events ev
-                LEFT JOIN users u3 ON u3.id::text = ev.actor_id::text
+                LEFT JOIN users u3 ON u3.username = ev.actor_id
                 WHERE ev.submission_id = s.id
               ) AS workflow_history,
               COALESCE((
@@ -1100,11 +1515,13 @@ export class SubmissionsService {
                 WHERE sf.submission_id = s.id
               ), '[]'::json) AS files
        FROM submissions s
-       LEFT JOIN users su ON su.id::text = s.student_id::text
-       WHERE s.student_id = $1::text
+       LEFT JOIN users su ON su.username = s.student_id
+       LEFT JOIN submission_periods sp ON sp.id = s.submission_period_id
+       LEFT JOIN semesters sem ON sem.id = sp.semester_id
+       WHERE s.student_id = $1
           OR EXISTS (
             SELECT 1 FROM submission_authors sa_vis
-            WHERE sa_vis.submission_id = s.id AND sa_vis.user_id = $2::uuid
+            WHERE sa_vis.submission_id = s.id AND sa_vis.user_id = $2
           )
        ORDER BY s.created_at DESC`,
       [studentId, studentId]
@@ -1120,20 +1537,23 @@ export class SubmissionsService {
               COALESCE((
                 SELECT string_agg(u.display_name, '; ' ORDER BY sa.sort_order)
                 FROM submission_authors sa
-                JOIN users u ON u.id = sa.user_id
+                JOIN users u ON u.username = sa.user_id
                 WHERE sa.submission_id = s.id
               ), s.author) AS author,
               COALESCE((
-                SELECT string_agg(rv.display_name, '; ' ORDER BY sr.sort_order)
-                FROM submission_reviewers sr
-                JOIN users rv ON rv.id = sr.user_id
-                WHERE sr.submission_id = s.id
-              ), s.advisor) AS advisor,
+                SELECT string_agg(rv.display_name, '; ' ORDER BY r.sort_order)
+                FROM reviews r
+                JOIN users rv ON rv.username = r.reviewer_id
+                WHERE r.submission_id = s.id
+              ), s.reviewer) AS reviewer,
               s.abstract,
               s.keywords,
               s.university_name,
-              s.faculty_name,
-              s.semester_name,
+              COALESCE(NULLIF(s.faculty_name, ''), f.name) AS faculty_name,
+              COALESCE(NULLIF(s.semester_name, ''), sem.name) AS semester_name,
+              s.submission_period_id,
+              sp.name AS period_name,
+              sp.semester_id,
               ${THESIS_METADATA_SELECT},
               s.status,
               s.created_at,
@@ -1141,7 +1561,7 @@ export class SubmissionsService {
               COALESCE(su.display_name, su.username) AS submitter,
               su.username AS submitter_username,
               s.author AS author_snapshot,
-              s.advisor AS advisor_snapshot,
+              s.reviewer AS reviewer_snapshot,
               s.dspace_item_id,
               (
                 SELECT COALESCE(
@@ -1153,11 +1573,11 @@ export class SubmissionsService {
               ) AS author_user_ids,
               (
                 SELECT COALESCE(
-                  json_agg(sr2.user_id::text ORDER BY sr2.sort_order),
+                  json_agg(r_vis.reviewer_id::text ORDER BY r_vis.sort_order),
                   '[]'::json
                 )
-                FROM submission_reviewers sr2
-                WHERE sr2.submission_id = s.id
+                FROM reviews r_vis
+                WHERE r_vis.submission_id = s.id
               ) AS reviewer_user_ids,
               (
                 SELECT COALESCE(
@@ -1167,16 +1587,16 @@ export class SubmissionsService {
                       'reviewer', COALESCE(u2.display_name, u2.username),
                       'username', u2.username,
                       'decision', r2.decision,
-                      'status', r2.status,
                       'comment', r2.comment,
-                      'decidedAt', r2.decided_at
+                      'decidedAt', r2.decided_at,
+                      'sortOrder', r2.sort_order
                     )
-                    ORDER BY COALESCE(u2.display_name, u2.username)
+                    ORDER BY r2.sort_order, COALESCE(u2.display_name, u2.username)
                   ),
                   '[]'::json
                 )
                 FROM reviews r2
-                JOIN users u2 ON u2.id::text = r2.reviewer_id::text
+                JOIN users u2 ON u2.username = r2.reviewer_id
                 WHERE r2.submission_id = s.id
               ) AS reviews,
               (
@@ -1196,7 +1616,7 @@ export class SubmissionsService {
                   '[]'::json
                 )
                 FROM submission_events ev
-                LEFT JOIN users u3 ON u3.id::text = ev.actor_id::text
+                LEFT JOIN users u3 ON u3.username = ev.actor_id
                 WHERE ev.submission_id = s.id
               ) AS workflow_history,
               COALESCE((
@@ -1213,7 +1633,10 @@ export class SubmissionsService {
                 WHERE sf.submission_id = s.id
               ), '[]'::json) AS files
        FROM submissions s
-       LEFT JOIN users su ON su.id::text = s.student_id::text
+       LEFT JOIN users su ON su.username = s.student_id
+       LEFT JOIN submission_periods sp ON sp.id = s.submission_period_id
+       LEFT JOIN semesters sem ON sem.id = sp.semester_id
+       LEFT JOIN faculties f ON f.id = sem.faculty_id
        ORDER BY s.created_at DESC`
     );
 
@@ -1239,7 +1662,7 @@ export class SubmissionsService {
 
     const row = result.rows[0];
 
-    if (user.role === "library_staff" || user.role === "director") {
+    if (user.role === "library_staff" || user.role === "director" || user.role === "admin") {
       // allowed
     } else if (user.role === "student") {
       const accessResult = await this.db.query(
@@ -1247,12 +1670,12 @@ export class SubmissionsService {
          FROM submissions s
          WHERE s.id = $1::uuid
            AND (
-             s.student_id = $2::text
+             s.student_id = $2
              OR EXISTS (
                SELECT 1
                FROM submission_authors sa
                WHERE sa.submission_id = s.id
-                 AND sa.user_id = $2::uuid
+                 AND sa.user_id = $2
              )
            )
          LIMIT 1`,
@@ -1264,12 +1687,8 @@ export class SubmissionsService {
     } else if (user.role === "reviewer") {
       const accessResult = await this.db.query(
         `SELECT 1
-         FROM submission_reviewers sr
-         WHERE sr.submission_id = $1::uuid AND sr.user_id = $2::uuid
-         UNION
-         SELECT 1
          FROM reviews r
-         WHERE r.submission_id = $1::uuid AND r.reviewer_id = $2::uuid
+         WHERE r.submission_id = $1::uuid AND r.reviewer_id = $2
          LIMIT 1`,
         [submissionId, user.sub]
       );

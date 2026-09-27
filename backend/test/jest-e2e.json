@@ -1,0 +1,28 @@
+{
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "rootDir": ".",
+  "testEnvironment": "node",
+  "testRegex": ".e2e-spec.ts$",
+  "testPathIgnorePatterns": ["mail.e2e-spec.ts", "dspace-live.e2e-spec.ts"],
+  "setupFiles": ["<rootDir>/env.ts"],
+  "globalSetup": "<rootDir>/prepare-db.js",
+  "transform": {
+    "^.+\\.ts$": [
+      "ts-jest",
+      {
+        "tsconfig": {
+          "module": "commonjs",
+          "target": "ES2021",
+          "esModuleInterop": true,
+          "experimentalDecorators": true,
+          "emitDecoratorMetadata": true,
+          "strict": false,
+          "skipLibCheck": true
+        }
+      }
+    ]
+  },
+  "testTimeout": 120000,
+  "forceExit": true,
+  "reporters": ["default", "<rootDir>/markdown-reporter.js"]
+}
