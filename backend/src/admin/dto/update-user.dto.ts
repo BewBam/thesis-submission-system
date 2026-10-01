@@ -1,5 +1,6 @@
-import { IsIn, IsOptional, IsString, IsUUID, MinLength, ValidateIf } from "class-validator";
+import { IsIn, IsOptional, IsString, MinLength } from "class-validator";
 import { USER_ROLES } from "../../users/user-role";
+import { IsOptionalFacultyId } from "./is-faculty-id";
 
 export class UpdateUserDto {
   @IsOptional()
@@ -20,8 +21,6 @@ export class UpdateUserDto {
   @IsIn(["active", "disabled"])
   status?: "active" | "disabled";
 
-  @IsOptional()
-  @ValidateIf((_, value) => value !== null && value !== "")
-  @IsUUID()
+  @IsOptionalFacultyId()
   facultyId?: string | null;
 }

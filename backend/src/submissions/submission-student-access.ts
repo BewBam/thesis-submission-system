@@ -38,7 +38,16 @@ export function getStudentSubmissionCapabilities(
     };
   }
 
-  if (normalizedStatus === "rejected" || normalizedStatus === "approved") {
+  if (normalizedStatus === "rejected") {
+    return {
+      canEdit: true,
+      canDelete: true,
+      canRevertToDraft: false,
+      canSubmit: true
+    };
+  }
+
+  if (normalizedStatus === "approved") {
     return {
       canEdit: true,
       canDelete: false,

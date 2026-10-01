@@ -15,6 +15,8 @@ type UserAdminRow = {
   faculty_name: string | null;
 };
 
+const MAX_IMPORT_ROWS = 5000;
+
 function roleNeedsFaculty(role: UserRole) {
   return role === "student" || role === "reviewer";
 }
@@ -221,12 +223,22 @@ export class AdminUsersService {
     return Buffer.from(buffer);
   }
 
-  async previewFromExcel(fileBuffer: Buffer) {
-    return this.parseExcelRows(fileBuffer);
+  async previewImport(fileBuffer: Buffer, originalName = "") {
+    const matrix = /\.csv$/i.test(originalName)
+      ? parseCsvMatrix(fileBuffer)
+      : await this.excelMatrix(fileBuffer);
+    return this.previewMatrix(matrix);
   }
 
   async confirmImport(
-    rows: Array<{ username: string; displayName: string; role: UserRole; facultyId?: string | null }>
+    rows: Array<{
+      username: string;
+      displayName: string;
+      role: UserRole;
+      facultyId?: string | null;
+      password?: string | null;
+      status?: "active" | "disabled";
+    }>
   ) {
     const created: { username: string; displayName: string; role: UserRole; facultyName: string | null }[] = [];
     const errors: { row?: number; username?: string; message: string }[] = [];
@@ -236,12 +248,19 @@ export class AdminUsersService {
       const username = raw.username.trim();
       const displayName = raw.displayName.trim();
       const role = raw.role;
+      const password = raw.password?.trim() ? raw.password.trim() : null;
+      const status = raw.status === "disabled" ? "disabled" : "active";
       const usernameKey = username.toLowerCase();
       if (seen.has(usernameKey)) {
         errors.push({ username, message: "Duplicate username in import list" });
         continue;
       }
       seen.add(usernameKey);
+
+      if (password && password.length < 6) {
+        errors.push({ username, message: "Password must be at least 6 characters" });
+        continue;
+      }
 
       const existing = await this.db.query(`SELECT 1 FROM users WHERE lower(username) = lower($1) LIMIT 1`, [
         username
@@ -257,7 +276,7 @@ export class AdminUsersService {
         continue;
       }
 
-      const inserted = await this.insertImportedUser(username, displayName, role, faculty.id);
+      const inserted = await this.insertImportedUser(username, displayName, role, faculty.id, password, status);
       if ("error" in inserted) {
         errors.push({ username, message: inserted.error });
       } else {
@@ -273,7 +292,7 @@ export class AdminUsersService {
     };
   }
 
-  private async parseExcelRows(fileBuffer: Buffer) {
+  private async excelMatrix(fileBuffer: Buffer): Promise<string[][]> {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(fileBuffer as unknown as ArrayBuffer);
     const sheet = workbook.worksheets[0];
@@ -281,40 +300,73 @@ export class AdminUsersService {
       throw new BadRequestException("The Excel file has no worksheets");
     }
 
-    const headerRow = sheet.getRow(1);
-    const colIndex: { username?: number; displayName?: number; role?: number; faculty?: number } = {};
-    headerRow.eachCell((cell: ExcelJS.Cell, colNumber: number) => {
-      const key = normalizeImportHeader(cellText(cell.value));
-      if (key === "username") colIndex.username = colNumber;
-      if (key === "display name" || key === "displayname" || key === "display_name") {
-        colIndex.displayName = colNumber;
+    const matrix: string[][] = [];
+    for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
+      const row = sheet.getRow(rowNumber);
+      const width = Math.max(sheet.columnCount, row.cellCount);
+      const cells: string[] = [];
+      for (let col = 1; col <= width; col += 1) {
+        cells.push(cellText(row.getCell(col).value).trim());
       }
-      if (key === "role") colIndex.role = colNumber;
-      if (key === "faculty" || key === "faculty name" || key === "khoa") colIndex.faculty = colNumber;
-    });
-    if (!colIndex.username || !colIndex.displayName || !colIndex.role || !colIndex.faculty) {
-      throw new BadRequestException("Template columns required: username, display name, role, faculty");
+      matrix.push(cells);
+    }
+    return matrix;
+  }
+
+  private async previewMatrix(matrix: string[][]) {
+    const headerIndex = matrix.findIndex((row) => row.some((cell) => cell.trim() !== ""));
+    if (headerIndex < 0) {
+      throw new BadRequestException("The file has no header row");
+    }
+
+    const columns = mapImportColumns(matrix[headerIndex]);
+    if (!hasImportIdentityColumns(columns)) {
+      throw new BadRequestException(
+        "Unrecognized columns. Use username, display name, role, faculty — or email, netid, last_name, first_name, phone, language, can_log_in, password."
+      );
     }
 
     const toImport: {
       row: number;
       username: string;
       displayName: string;
+      email: string | null;
       role: UserRole;
+      status: "active" | "disabled";
+      password: string | null;
       facultyId: string | null;
       facultyName: string | null;
     }[] = [];
     const errors: { row: number; username?: string; message: string }[] = [];
     const seen = new Set<string>();
+    let dataRows = 0;
 
-    for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber += 1) {
-      const row = sheet.getRow(rowNumber);
-      const username = cellText(row.getCell(colIndex.username).value).trim();
-      const displayName = cellText(row.getCell(colIndex.displayName).value).trim();
-      const roleRaw = cellText(row.getCell(colIndex.role).value).trim().toLowerCase();
-      const facultyName = cellText(row.getCell(colIndex.faculty).value).trim();
-      if (!username && !displayName && !roleRaw && !facultyName) {
+    for (let index = headerIndex + 1; index < matrix.length; index += 1) {
+      const cells = matrix[index];
+      const rowNumber = index + 1;
+      const email = cellAt(cells, columns.email);
+      const username = firstNonEmpty(
+        cellAt(cells, columns.username),
+        cellAt(cells, columns.netid),
+        emailLocalPart(email)
+      );
+      const displayName = buildDisplayName(
+        cellAt(cells, columns.displayName),
+        cellAt(cells, columns.lastName),
+        cellAt(cells, columns.firstName),
+        email
+      );
+      const roleRaw = cellAt(cells, columns.role).toLowerCase();
+      const facultyName = cellAt(cells, columns.faculty);
+      const passwordRaw = cellAt(cells, columns.password);
+      const canLogInRaw = columns.canLogIn == null ? "" : cellAt(cells, columns.canLogIn);
+      if (!username && !displayName && !roleRaw && !facultyName && !email && !passwordRaw && !canLogInRaw) {
         continue;
+      }
+
+      dataRows += 1;
+      if (dataRows > MAX_IMPORT_ROWS) {
+        throw new BadRequestException(`Import is limited to ${MAX_IMPORT_ROWS} users`);
       }
       if (username.length < 2) {
         errors.push({ row: rowNumber, username, message: "Username must be at least 2 characters" });
@@ -324,14 +376,44 @@ export class AdminUsersService {
         errors.push({ row: rowNumber, username, message: "Display name is required" });
         continue;
       }
-      if (!isUserRole(roleRaw)) {
+
+      let role: UserRole;
+      if (columns.role == null) {
+        role = "student";
+      } else if (!isUserRole(roleRaw)) {
         errors.push({
           row: rowNumber,
           username,
-          message: `Invalid role "${roleRaw || ""}". Use: ${USER_ROLES.join(", ")}`
+          message: `Invalid role "${roleRaw}". Use: ${USER_ROLES.join(", ")}`
         });
         continue;
+      } else {
+        role = roleRaw;
       }
+
+      let password: string | null = null;
+      if (passwordRaw) {
+        if (passwordRaw.length < 6) {
+          errors.push({ row: rowNumber, username, message: "Password must be at least 6 characters" });
+          continue;
+        }
+        password = passwordRaw;
+      }
+
+      let status: "active" | "disabled" = "active";
+      if (canLogInRaw) {
+        const parsed = parseCanLogIn(canLogInRaw);
+        if (!parsed) {
+          errors.push({
+            row: rowNumber,
+            username,
+            message: `Invalid can_log_in "${canLogInRaw}". Use true or false.`
+          });
+          continue;
+        }
+        status = parsed;
+      }
+
       const usernameKey = username.toLowerCase();
       if (seen.has(usernameKey)) {
         errors.push({ row: rowNumber, username, message: "Duplicate username in file" });
@@ -347,25 +429,35 @@ export class AdminUsersService {
         continue;
       }
 
-      const faculty = await this.resolveFacultyName(facultyName, roleRaw);
-      if (faculty.error) {
-        errors.push({ row: rowNumber, username, message: faculty.error });
-        continue;
+      let facultyId: string | null = null;
+      let resolvedFacultyName: string | null = null;
+      if (facultyName) {
+        const faculty = await this.resolveFacultyName(facultyName, role);
+        if (faculty.error) {
+          errors.push({ row: rowNumber, username, message: faculty.error });
+          continue;
+        }
+        facultyId = faculty.id;
+        resolvedFacultyName = faculty.name;
       }
 
       toImport.push({
         row: rowNumber,
         username,
         displayName,
-        role: roleRaw,
-        facultyId: faculty.id,
-        facultyName: faculty.name
+        email: email || null,
+        role,
+        status,
+        password,
+        facultyId,
+        facultyName: resolvedFacultyName
       });
     }
 
     return {
       toImportCount: toImport.length,
       errorCount: errors.length,
+      requiresFaculty: toImport.some((row) => roleNeedsFaculty(row.role) && !row.facultyId),
       toImport,
       errors
     };
@@ -375,13 +467,15 @@ export class AdminUsersService {
     username: string,
     displayName: string,
     role: UserRole,
-    facultyId: string | null
+    facultyId: string | null,
+    password: string | null,
+    status: "active" | "disabled"
   ): Promise<{ username: string; displayName: string; role: UserRole; facultyName: string | null } | { error: string }> {
     try {
       await this.db.query(
         `INSERT INTO users (username, password, display_name, role, status, auth_source, faculty_id)
-         VALUES ($1, NULL, $2, $3, 'active', 'google', $4)`,
-        [username, displayName, role, facultyId]
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [username, password, displayName, role, status, password ? "local" : "google", facultyId]
       );
       const faculty = facultyId
         ? await this.db.query<{ name: string }>(`SELECT name FROM faculties WHERE id = $1::uuid LIMIT 1`, [facultyId])
@@ -451,6 +545,125 @@ export class AdminUsersService {
       return { id: null, error: error instanceof Error ? error.message : "Invalid faculty" };
     }
   }
+}
+
+type ImportColumns = {
+  username?: number;
+  netid?: number;
+  email?: number;
+  displayName?: number;
+  firstName?: number;
+  lastName?: number;
+  role?: number;
+  faculty?: number;
+  password?: number;
+  canLogIn?: number;
+};
+
+function mapImportColumns(headers: string[]): ImportColumns {
+  const columns: ImportColumns = {};
+  headers.forEach((header, index) => {
+    const key = normalizeImportHeader(header);
+    if (key === "username" || key === "user name") columns.username = index;
+    else if (key === "netid" || key === "net id" || key === "student id" || key === "mssv") columns.netid = index;
+    else if (key === "email" || key === "e mail") columns.email = index;
+    else if (key === "display name" || key === "displayname" || key === "full name" || key === "name") {
+      columns.displayName = index;
+    } else if (key === "first name" || key === "firstname" || key === "given name") columns.firstName = index;
+    else if (key === "last name" || key === "lastname" || key === "surname" || key === "family name") {
+      columns.lastName = index;
+    } else if (key === "role") columns.role = index;
+    else if (key === "faculty" || key === "faculty name" || key === "khoa") columns.faculty = index;
+    else if (key === "password") columns.password = index;
+    else if (key === "can log in" || key === "canlogin") columns.canLogIn = index;
+  });
+  return columns;
+}
+
+function hasImportIdentityColumns(columns: ImportColumns) {
+  const hasUser = columns.username != null || columns.netid != null || columns.email != null;
+  const hasName = columns.displayName != null || columns.firstName != null || columns.lastName != null;
+  return hasUser && hasName;
+}
+
+function cellAt(cells: string[], index: number | undefined) {
+  if (index == null) return "";
+  return (cells[index] ?? "").trim();
+}
+
+function firstNonEmpty(...values: string[]) {
+  return values.find((value) => value.trim())?.trim() ?? "";
+}
+
+function emailLocalPart(email: string) {
+  const trimmed = email.trim();
+  const at = trimmed.indexOf("@");
+  if (at <= 0) return "";
+  return trimmed.slice(0, at).trim();
+}
+
+function buildDisplayName(displayName: string, lastName: string, firstName: string, email: string) {
+  if (displayName.trim()) return displayName.trim();
+  const combined = [lastName.trim(), firstName.trim()].filter(Boolean).join(" ");
+  if (combined) return combined;
+  return email.trim();
+}
+
+function parseCanLogIn(value: string): "active" | "disabled" | null {
+  const normalized = value.trim().toLowerCase();
+  if (["true", "yes", "y", "1"].includes(normalized)) return "active";
+  if (["false", "no", "n", "0"].includes(normalized)) return "disabled";
+  return null;
+}
+
+function parseCsvMatrix(fileBuffer: Buffer): string[][] {
+  let text = fileBuffer.toString("utf8");
+  if (text.charCodeAt(0) === 0xfeff) {
+    text = text.slice(1);
+  }
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (inQuotes) {
+      if (char === '"') {
+        if (text[index + 1] === '"') {
+          field += '"';
+          index += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += char;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inQuotes = true;
+      continue;
+    }
+    if (char === ",") {
+      row.push(field);
+      field = "";
+      continue;
+    }
+    if (char === "\r") continue;
+    if (char === "\n") {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+      continue;
+    }
+    field += char;
+  }
+  if (field.length > 0 || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows;
 }
 
 function normalizeImportHeader(value: string) {

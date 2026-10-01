@@ -16,6 +16,7 @@ Tài liệu chi tiết cho từng endpoint backend.
 | GET | `/auth/login-options` | [`get-auth-login-options.md`](./get-auth-login-options.md) |
 | POST | `/auth/login` | [`post-auth-login.md`](./post-auth-login.md) |
 | GET | `/auth/me` | [`get-auth-me.md`](./get-auth-me.md) |
+| POST | `/auth/change-password` | [`post-auth-change-password.md`](./post-auth-change-password.md) |
 | GET | `/auth/google` | [`get-auth-google.md`](./get-auth-google.md) |
 | GET | `/admin/users/import-template` | [`admin-users-import.md`](./admin-users-import.md) |
 | POST | `/admin/users/import/preview` | [`admin-users-import.md`](./admin-users-import.md) |

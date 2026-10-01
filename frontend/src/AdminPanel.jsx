@@ -156,6 +156,7 @@ export default function AdminPanel({
   const [exportingUsers, setExportingUsers] = useState(false);
   const [faculties, setFaculties] = useState([]);
   const [importPreview, setImportPreview] = useState(null);
+  const [importFacultyId, setImportFacultyId] = useState(null);
   const [importResult, setImportResult] = useState(null);
   const [editingUser, setEditingUser] = useState(null);
   const [userForm] = Form.useForm();
@@ -397,8 +398,9 @@ export default function AdminPanel({
       });
       const payload = await parseResponse(response);
       if (!response.ok) {
-        throw new Error(payload?.message || "Unable to read Excel file");
+        throw new Error(payload?.message || "Unable to read the file");
       }
+      setImportFacultyId(null);
       setImportPreview({ ...payload, fileName: file.name });
       if (!payload.toImportCount && payload.errorCount) {
         message.warning("No valid users to import. Check the skipped rows.");
@@ -406,7 +408,7 @@ export default function AdminPanel({
         message.info("The file had no data rows.");
       }
     } catch (error) {
-      message.error(error.message || "Unable to read Excel file");
+      message.error(error.message || "Unable to read the file");
       setImportPreview(null);
     } finally {
       setPreviewingImport(false);
@@ -417,7 +419,11 @@ export default function AdminPanel({
   const confirmImportUsers = async () => {
     const rows = importPreview?.toImport || [];
     if (!rows.length) {
-      message.warning("Upload an Excel file and review the list first.");
+      message.warning("Upload a file and review the list first.");
+      return;
+    }
+    if (importPreview?.requiresFaculty && !importFacultyId) {
+      message.warning("Choose a faculty for students and reviewers that have none in the file.");
       return;
     }
     setImportingUsers(true);
@@ -426,12 +432,18 @@ export default function AdminPanel({
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders(auth.token) },
         body: JSON.stringify({
-          users: rows.map((row) => ({
-            username: row.username,
-            displayName: row.displayName,
-            role: row.role,
-            facultyId: row.facultyId || null
-          }))
+          users: rows.map((row) => {
+            const needsFaculty = row.role === "student" || row.role === "reviewer";
+            const user = {
+              username: row.username,
+              displayName: row.displayName,
+              role: row.role,
+              facultyId: row.facultyId || (needsFaculty ? importFacultyId : null),
+              status: row.status || "active"
+            };
+            if (row.password) user.password = row.password;
+            return user;
+          })
         })
       });
       const payload = await parseResponse(response);
@@ -1288,7 +1300,7 @@ export default function AdminPanel({
         title="Import users"
         open={importModalOpen}
         onCancel={() => setImportModalOpen(false)}
-        width={760}
+        width={920}
         destroyOnClose
         footer={[
           <Button key="cancel" onClick={() => setImportModalOpen(false)}>
@@ -1299,7 +1311,9 @@ export default function AdminPanel({
             type="primary"
             icon={<UploadOutlined />}
             loading={importingUsers}
-            disabled={!importPreview?.toImport?.length}
+            disabled={
+              !importPreview?.toImport?.length || (importPreview?.requiresFaculty && !importFacultyId)
+            }
             onClick={confirmImportUsers}
           >
             Import
@@ -1307,22 +1321,43 @@ export default function AdminPanel({
         ]}
       >
         <Paragraph type="secondary">
-          1. Download the template. 2. Upload the filled .xlsx file to preview. 3. Check the list, then click
-          Import.           Columns: <Text code>username</Text>, <Text code>display name</Text>, <Text code>role</Text>,{" "}
-          <Text code>faculty</Text> ({ROLES.join(", ")}). Faculty is required for student and reviewer, and must
-          match a faculty name. Accounts have no password and sign in with Google as{" "}
-          <Text code>username@hcmut.edu.vn</Text>.
+          1. Download the template, or use a CSV export. 2. Upload <Text code>.xlsx</Text> or <Text code>.csv</Text>{" "}
+          to preview. 3. Check the list, then click Import.
+        </Paragraph>
+        <Paragraph type="secondary">
+          Portal columns: <Text code>username</Text>, <Text code>display name</Text>, <Text code>role</Text>,{" "}
+          <Text code>faculty</Text> ({ROLES.join(", ")}). CSV columns: <Text code>email</Text>, <Text code>netid</Text>,{" "}
+          <Text code>last_name</Text>, <Text code>first_name</Text>, <Text code>phone</Text>, <Text code>language</Text>,{" "}
+          <Text code>can_log_in</Text>, <Text code>password</Text>. <Text code>netid</Text> becomes the username, and
+          the display name is last name then first name. A missing role defaults to student. Faculty is required for
+          student and reviewer — choose one below when the file has none. A password is used for username login; rows
+          without a password sign in with Google as <Text code>username@hcmut.edu.vn</Text>.{" "}
+          <Text code>can_log_in</Text> false creates a disabled account. Phone and language are accepted and not stored.
         </Paragraph>
         <Space wrap style={{ marginBottom: 16 }}>
           <Button icon={<DownloadOutlined />} loading={downloadingTemplate} onClick={downloadUserTemplate}>
             Download template
           </Button>
-          <Upload accept=".xlsx" showUploadList={false} beforeUpload={previewUsersFile}>
+          <Upload accept=".xlsx,.csv,text/csv" showUploadList={false} beforeUpload={previewUsersFile}>
             <Button icon={<UploadOutlined />} loading={previewingImport}>
-              Upload Excel
+              Upload file
             </Button>
           </Upload>
         </Space>
+        {importPreview?.requiresFaculty ? (
+          <Form layout="vertical" style={{ marginBottom: 16, maxWidth: 480 }}>
+            <Form.Item label="Faculty for rows without one" required style={{ marginBottom: 0 }}>
+              <Select
+                showSearch
+                optionFilterProp="label"
+                placeholder="Select faculty"
+                value={importFacultyId || undefined}
+                onChange={setImportFacultyId}
+                options={faculties.map((faculty) => ({ value: faculty.id, label: faculty.name }))}
+              />
+            </Form.Item>
+          </Form>
+        ) : null}
         {importPreview ? (
           <>
             <Paragraph>
@@ -1340,8 +1375,19 @@ export default function AdminPanel({
                   { title: "Row", dataIndex: "row", width: 70 },
                   { title: "Username", dataIndex: "username" },
                   { title: "Display name", dataIndex: "displayName" },
-                  { title: "Role", dataIndex: "role", width: 140 },
-                  { title: "Faculty", dataIndex: "facultyName" }
+                  { title: "Email", dataIndex: "email" },
+                  { title: "Role", dataIndex: "role", width: 120 },
+                  { title: "Status", dataIndex: "status", width: 90 },
+                  {
+                    title: "Faculty",
+                    dataIndex: "facultyName",
+                    render: (value, row) => {
+                      if (value) return value;
+                      const needsFaculty = row.role === "student" || row.role === "reviewer";
+                      if (!needsFaculty || !importFacultyId) return "";
+                      return faculties.find((faculty) => faculty.id === importFacultyId)?.name || "";
+                    }
+                  }
                 ]}
               />
             ) : (

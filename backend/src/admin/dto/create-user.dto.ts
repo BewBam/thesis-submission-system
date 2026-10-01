@@ -1,5 +1,6 @@
-import { IsIn, IsOptional, IsString, IsUUID, MinLength } from "class-validator";
+import { IsIn, IsString, MinLength } from "class-validator";
 import { USER_ROLES } from "../../users/user-role";
+import { IsOptionalFacultyId } from "./is-faculty-id";
 
 export class CreateUserDto {
   @IsString()
@@ -17,7 +18,6 @@ export class CreateUserDto {
   @IsIn([...USER_ROLES])
   role!: (typeof USER_ROLES)[number];
 
-  @IsOptional()
-  @IsUUID()
-  facultyId?: string;
+  @IsOptionalFacultyId()
+  facultyId?: string | null;
 }

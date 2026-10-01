@@ -81,8 +81,8 @@ export class AdminController {
       storage: memoryStorage(),
       limits: { fileSize: 2 * 1024 * 1024 },
       fileFilter: (_req, file, cb) => {
-        if (!/\.xlsx$/i.test(file.originalname || "")) {
-          cb(new BadRequestException("File must be .xlsx"), false);
+        if (!/\.(xlsx|csv)$/i.test(file.originalname || "")) {
+          cb(new BadRequestException("File must be .xlsx or .csv"), false);
           return;
         }
         cb(null, true);
@@ -91,9 +91,9 @@ export class AdminController {
   )
   previewImportUsers(@UploadedFile() file?: { buffer: Buffer; originalname: string }) {
     if (!file?.buffer?.length) {
-      throw new BadRequestException("Excel file is required");
+      throw new BadRequestException("A .xlsx or .csv file is required");
     }
-    return this.adminUsersService.previewFromExcel(file.buffer);
+    return this.adminUsersService.previewImport(file.buffer, file.originalname || "");
   }
 
   @Post("users/import")

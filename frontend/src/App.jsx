@@ -24,7 +24,6 @@ import AdminPanel from "./AdminPanel.jsx";
 import LibraryArchivePanel from "./LibraryArchivePanel.jsx";
 
 const STORAGE_KEY = "thesis_portal_auth";
-const BRAND_PRIMARY = "#1488D8";
 const BRAND_SECONDARY = "#132d65";
 const LOGO_PATH = "/images/01_logobachkhoatoi.png";
 const { Header, Content } = Layout;
@@ -57,6 +56,28 @@ const DOCUMENT_TYPE_OPTIONS = [
   { value: "Dissertation", label: "Dissertation" },
   { value: "Graduation thesis", label: "Graduation thesis" }
 ];
+
+function foldSearchText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/gi, "d")
+    .toLowerCase();
+}
+
+function personOptionLabel(displayName, username) {
+  const name = displayName || username || "";
+  return username && name !== username ? `${name} (${username})` : name || username;
+}
+
+function personOptionFilter(input, option) {
+  const query = foldSearchText(input).trim();
+  if (!query) {
+    return true;
+  }
+  const haystack = option?.searchText || foldSearchText(option?.label);
+  return String(haystack).includes(query);
+}
 
 const defaultArchiveMetadata = (year = String(new Date().getFullYear())) => ({
   dateIssued: year,
@@ -220,7 +241,15 @@ function getStudentSubmissionCapabilities(record, currentUserId, allSubmissions 
   if (status === "archived") {
     return readOnlyCaps;
   }
-  if (status === "rejected" || status === "approved") {
+  if (status === "rejected") {
+    return {
+      canEdit: true,
+      canDelete: true,
+      canRevertToDraft: false,
+      canSubmit: !submitBlocked
+    };
+  }
+  if (status === "approved") {
     return {
       canEdit: true,
       canDelete: false,
@@ -286,33 +315,6 @@ function thesisFileListFromRecord(record) {
       existingFileId: thesis.id
     }
   ];
-}
-
-function getRoleColor(role) {
-  if (role === "admin") {
-    return BRAND_SECONDARY;
-  }
-  if (role === "director") {
-    return "#6b4c9a";
-  }
-  if (role === "library_staff") {
-    return "#c45c26";
-  }
-  if (role === "reviewer") {
-    return BRAND_PRIMARY;
-  }
-  return "#2d9f75";
-}
-
-function roleLabel(role) {
-  const labels = {
-    admin: "Administrator",
-    director: "Library director",
-    library_staff: "Library staff",
-    reviewer: "Reviewer",
-    student: "Student"
-  };
-  return labels[role] || role;
 }
 
 function canStaffDeleteSubmission(role) {
@@ -542,10 +544,13 @@ function authHeaders(token) {
 
 function App() {
   const [loginForm] = Form.useForm();
+  const [passwordForm] = Form.useForm();
   const [submissionForm] = Form.useForm();
   const [auth, setAuth] = useState(null);
   const [loginMethod, setLoginMethod] = useState("username");
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [passwordModalOpen, setPasswordModalOpen] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
   const [isSubmittingSubmission, setIsSubmittingSubmission] = useState(false);
   const [isDeletingSubmission, setIsDeletingSubmission] = useState(false);
   const [isRevertingSubmission, setIsRevertingSubmission] = useState(false);
@@ -963,7 +968,7 @@ function App() {
     {
       title: "Actions",
       key: "actions",
-      width: 100,
+      width: 180,
       render: (_value, record) => {
         const caps = getStudentSubmissionCapabilities(record, actingStudentId, studentSubmissions);
         return (
@@ -971,6 +976,16 @@ function App() {
             {isAdminActor || caps.canEdit ? (
               <Button type="link" size="small" onClick={() => void loadSubmissionIntoForm(record)}>
                 Edit
+              </Button>
+            ) : null}
+            {caps.canDelete ? (
+              <Button
+                type="link"
+                size="small"
+                danger
+                onClick={() => promptDeleteSubmission(record)}
+              >
+                Delete
               </Button>
             ) : null}
             <Button type="link" size="small" onClick={() => setStudentDetailRecord(record)}>
@@ -1415,7 +1430,8 @@ function App() {
       setReviewerOptions(
         payload.map((item) => ({
           value: item.id,
-          label: `${item.displayName || item.username} (${item.username})`
+          label: personOptionLabel(item.displayName, item.username),
+          searchText: foldSearchText(`${item.displayName || ""} ${item.username || ""}`)
         }))
       );
     } catch (error) {
@@ -1529,7 +1545,8 @@ function App() {
       setStudentOptions(
         payload.map((item) => ({
           value: item.id,
-          label: `${item.displayName || item.username} (${item.username})`,
+          label: personOptionLabel(item.displayName, item.username),
+          searchText: foldSearchText(`${item.displayName || ""} ${item.username || ""}`),
           username: item.username,
           facultyId: item.facultyId || "",
           facultyName: item.facultyName || ""
@@ -1853,40 +1870,46 @@ function App() {
     const facultyId = record.faculty_id || undefined;
     const semesterId = record.semester_id || undefined;
     const periodId = record.submission_period_id || undefined;
+    const semesterLabel = record.semester_name || semesterId;
+    const periodLabel = record.period_name || "Saved submission period";
+
+    const withSavedSemester = (options) => {
+      if (!semesterId || options.some((item) => item.value === semesterId)) {
+        return options;
+      }
+      return [...options, { value: semesterId, label: semesterLabel }];
+    };
+    const withSavedPeriod = (periods) => {
+      if (!periodId || periods.some((item) => item.id === periodId)) {
+        return periods;
+      }
+      return [
+        ...periods,
+        {
+          id: periodId,
+          name: periodLabel,
+          closesAt: record.period_closes_at || null
+        }
+      ];
+    };
 
     if (facultyId) {
       setArchiveFaculties((prev) => {
         if (prev.some((item) => item.value === facultyId)) {
           return prev;
         }
-        const label = record.faculty_name
-          ? `${record.faculty_name}`
-          : facultyId;
+        const label = record.faculty_name ? `${record.faculty_name}` : facultyId;
         return [...prev, { value: facultyId, label }];
       });
       const semesterOptions = await loadArchiveSemesters(facultyId);
-      if (semesterId && !semesterOptions.some((item) => item.value === semesterId)) {
-        setArchiveSemesters((prev) => [
-          ...prev,
-          {
-            value: semesterId,
-            label: record.semester_name || semesterId
-          }
-        ]);
-      }
-      if (facultyId && semesterId) {
+      setArchiveSemesters(withSavedSemester(semesterOptions));
+      if (semesterId) {
         const periods = await loadArchivePeriods(facultyId, semesterId);
-        if (periodId && !periods.some((item) => item.id === periodId)) {
-          setArchivePeriods((prev) => [
-            ...prev,
-            {
-              id: periodId,
-              name: "Saved submission period",
-              closesAt: new Date().toISOString()
-            }
-          ]);
-        }
+        setArchivePeriods(withSavedPeriod(periods));
       }
+    } else {
+      setArchiveSemesters((prev) => withSavedSemester(prev));
+      setArchivePeriods((prev) => withSavedPeriod(prev));
     }
 
     submissionForm.setFieldsValue({
@@ -2517,6 +2540,44 @@ function App() {
     }
   ];
 
+  const handleChangePassword = async (values) => {
+    if (!auth?.token) {
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      const body = { newPassword: values.newPassword };
+      if (auth.user?.hasPassword !== false && values.currentPassword) {
+        body.currentPassword = values.currentPassword;
+      }
+      const response = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(auth.token)
+        },
+        body: JSON.stringify(body)
+      });
+      const payload = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(payload?.message || "Unable to change password");
+      }
+      const nextAuth = {
+        ...auth,
+        user: { ...auth.user, hasPassword: true }
+      };
+      setAuth(nextAuth);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(nextAuth));
+      passwordForm.resetFields();
+      setPasswordModalOpen(false);
+      message.success("Password updated");
+    } catch (error) {
+      message.error(error.message || "Unable to change password");
+    } finally {
+      setChangingPassword(false);
+    }
+  };
+
   const handleLogout = () => {
     setAuth(null);
     setAdminDashTab("admin");
@@ -2739,11 +2800,22 @@ function App() {
                         <Title level={5} style={{ margin: 0 }}>
                           {studentFocusRecord.status === "draft" ? "Draft details" : "Submission details"}
                         </Title>
-                        {focusCaps?.canEdit ? (
-                          <Button type="primary" onClick={() => void loadSubmissionIntoForm(studentFocusRecord)}>
-                            Edit
-                          </Button>
-                        ) : null}
+                        <Space>
+                          {focusCaps?.canEdit ? (
+                            <Button type="primary" onClick={() => void loadSubmissionIntoForm(studentFocusRecord)}>
+                              Edit
+                            </Button>
+                          ) : null}
+                          {focusCaps?.canDelete ? (
+                            <Button
+                              danger
+                              loading={isDeletingSubmission}
+                              onClick={() => promptDeleteSubmission(studentFocusRecord)}
+                            >
+                              Delete
+                            </Button>
+                          ) : null}
+                        </Space>
                       </Space>
                       {renderSubmissionDetailBody(studentFocusRecord)}
                     </>
@@ -2764,7 +2836,6 @@ function App() {
                     <Form.Item
                       label="Faculty"
                       name="archiveFacultyId"
-                      extra="Taken from the student's faculty"
                       rules={[{ required: true, message: "This student is not assigned to a faculty" }]}
                     >
                       <Select
@@ -2809,7 +2880,9 @@ function App() {
                         onChange={handleSubmissionPeriodChange}
                         options={archivePeriods.map((p) => ({
                           value: p.id,
-                          label: `${p.name} (closes ${new Date(p.closesAt).toLocaleDateString()})`
+                          label: p.closesAt
+                            ? `${p.name} (closes ${new Date(p.closesAt).toLocaleDateString()})`
+                            : p.name
                         }))}
                         notFoundContent={
                           isLoadingArchivePeriods ? "Loading..." : "No open periods for this semester"
@@ -2830,8 +2903,8 @@ function App() {
                         showSearch
                         allowClear
                         disabled={isFormReadOnly}
-                        placeholder="Search and select student authors"
-                        optionFilterProp="label"
+                        placeholder="Search by name or username"
+                        filterOption={personOptionFilter}
                         loading={isLoadingStudents}
                         options={studentOptions}
                         maxTagCount="responsive"
@@ -2893,8 +2966,8 @@ function App() {
                         mode="multiple"
                         showSearch
                         allowClear
-                        placeholder="Search and select authors (student accounts)"
-                        optionFilterProp="label"
+                        placeholder="Search by name or username"
+                        filterOption={personOptionFilter}
                         loading={isLoadingStudents}
                         options={studentOptions}
                         maxTagCount="responsive"
@@ -2911,8 +2984,8 @@ function App() {
                         mode="multiple"
                         showSearch
                         allowClear
-                        placeholder="Search and select reviewers"
-                        optionFilterProp="label"
+                        placeholder="Search by name or username"
+                        filterOption={personOptionFilter}
                         loading={isLoadingReviewers}
                         options={reviewerOptions}
                         maxTagCount="responsive"
@@ -2949,7 +3022,6 @@ function App() {
                           label={field.label}
                           name={field.fieldKey}
                           rules={rules}
-                          extra={field.dspacePath ? `DSpace: ${field.dspacePath}` : undefined}
                         >
                           {control}
                         </Form.Item>
@@ -3075,6 +3147,14 @@ function App() {
                 user_id: {auth.user.id}
               </Text>
             </div>
+            <Button
+              onClick={() => {
+                passwordForm.resetFields();
+                setPasswordModalOpen(true);
+              }}
+            >
+              Change password
+            </Button>
             <Button danger onClick={handleLogout}>
               Log out
             </Button>
@@ -3153,9 +3233,6 @@ function App() {
           >
             <Space direction="vertical" style={{ width: "100%" }} size="middle">
               <Text>{greeting}</Text>
-              <Text>
-                Your role: <Tag color={getRoleColor(auth.user.role)}>{roleLabel(auth.user.role)}</Tag>
-              </Text>
               {auth.user.role === "student" ? (
                 renderThesisEntryWorkspace()
               ) : auth.user.role === "reviewer" ? (
@@ -3817,6 +3894,73 @@ function App() {
           value={directorRejectReason}
           onChange={(event) => setDirectorRejectReason(event.target.value)}
         />
+      </Modal>
+      <Modal
+        title="Change password"
+        open={passwordModalOpen}
+        onCancel={() => {
+          setPasswordModalOpen(false);
+          passwordForm.resetFields();
+        }}
+        footer={null}
+        destroyOnClose
+      >
+        <Form form={passwordForm} layout="vertical" onFinish={handleChangePassword}>
+          {auth?.user?.hasPassword === false ? (
+            <Paragraph type="secondary">
+              This account has no password yet. Set one to sign in with your username.
+            </Paragraph>
+          ) : (
+            <Form.Item
+              label="Current password"
+              name="currentPassword"
+              rules={[{ required: true, message: "Enter your current password" }]}
+            >
+              <Input.Password />
+            </Form.Item>
+          )}
+          <Form.Item
+            label="New password"
+            name="newPassword"
+            rules={[
+              { required: true, message: "Enter a new password" },
+              { min: 6, message: "Password must be at least 6 characters" }
+            ]}
+          >
+            <Input.Password />
+          </Form.Item>
+          <Form.Item
+            label="Confirm new password"
+            name="confirmPassword"
+            dependencies={["newPassword"]}
+            rules={[
+              { required: true, message: "Confirm your new password" },
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (!value || getFieldValue("newPassword") === value) {
+                    return Promise.resolve();
+                  }
+                  return Promise.reject(new Error("Passwords do not match"));
+                }
+              })
+            ]}
+          >
+            <Input.Password />
+          </Form.Item>
+          <Space>
+            <Button
+              onClick={() => {
+                setPasswordModalOpen(false);
+                passwordForm.resetFields();
+              }}
+            >
+              Cancel
+            </Button>
+            <Button type="primary" htmlType="submit" loading={changingPassword}>
+              Update password
+            </Button>
+          </Space>
+        </Form>
       </Modal>
     </Layout>
   );

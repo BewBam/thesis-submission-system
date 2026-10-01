@@ -118,7 +118,7 @@ Sau khi chọn đợt nộp, điền các mục sau:
 | Khi author chính Submit | Hệ thống xóa draft cá nhân của các co-authors |
 | Đang phản biện, **chưa có** phản biện nào duyệt/từ chối | Sửa, xóa, **Revert to draft** (chuyển về nháp) |
 | Đang phản biện, **đã có** phản biện duyệt hoặc từ chối | Không sửa — chờ kết quả cuối |
-| Bị từ chối (rejected) | Sửa và **Submit again** (Nộp lại) |
+| Bị từ chối (rejected) | Sửa, xóa, và **Submit again** (Nộp lại) |
 | Thư viện đã duyệt (approved) | Sửa và **Submit again** nếu cần gửi lại vòng xét duyệt |
 | Đã lưu trữ (archived) | Không chỉnh sửa |
 

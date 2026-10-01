@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   ServiceUnavailableException,
@@ -6,6 +7,7 @@ import {
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import { AdminSettingsService } from "../admin/admin-settings.service";
+import { ChangePasswordDto } from "./dto/change-password.dto";
 import { LoginDto } from "./dto/login.dto";
 import { GoogleAuthService } from "./google-auth.service";
 import { UsersService, type UserRecord } from "../users/users.service";
@@ -50,6 +52,26 @@ export class AuthService {
       throw new UnauthorizedException("This account has been disabled");
     }
     return this.publicUser(user);
+  }
+
+  async changePassword(userId: string, input: ChangePasswordDto) {
+    const user = await this.usersService.findById(userId);
+    if (!user) {
+      throw new UnauthorizedException("User not found");
+    }
+    if (user.status === "disabled") {
+      throw new UnauthorizedException("This account has been disabled");
+    }
+    if (user.password) {
+      if (!input.currentPassword || input.currentPassword !== user.password) {
+        throw new BadRequestException("Current password is incorrect");
+      }
+      if (input.newPassword === user.password) {
+        throw new BadRequestException("New password must be different from the current password");
+      }
+    }
+    await this.usersService.updatePassword(user.username, input.newPassword);
+    return { updated: true };
   }
 
   getGoogleAuthorizeRedirect(): string {
@@ -150,7 +172,8 @@ export class AuthService {
       role: user.role,
       email: user.email,
       facultyId: user.facultyId,
-      facultyName: user.facultyName
+      facultyName: user.facultyName,
+      hasPassword: Boolean(user.password)
     };
   }
 }

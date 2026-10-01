@@ -80,6 +80,10 @@ export class UsersService {
     return this.findByUsername(id);
   }
 
+  async updatePassword(username: string, password: string): Promise<void> {
+    await this.db.query(`UPDATE users SET password = $2 WHERE username = $1`, [username, password]);
+  }
+
   async updateProfileFromGoogle(
     username: string,
     input: { displayName: string }

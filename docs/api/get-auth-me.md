@@ -19,6 +19,7 @@ Lấy thông tin user hiện tại từ JWT (dùng sau Google callback).
 | `displayName` | string | Tên hiển thị |
 | `role` | string | Vai trò |
 | `email` | string \| null | Email Google / backfill |
+| `hasPassword` | boolean | `true` khi tài khoản đã có mật khẩu đăng nhập |
 
 ## Lỗi
 

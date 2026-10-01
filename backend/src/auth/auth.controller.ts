@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Post, Query, Req, Res, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Post, Query, Req, Res, UseGuards } from "@nestjs/common";
 import type { Response } from "express";
 import { AuthService } from "./auth.service";
+import { ChangePasswordDto } from "./dto/change-password.dto";
 import { LoginDto } from "./dto/login.dto";
 import { JwtAuthGuard } from "./jwt-auth.guard";
 import type { JwtPayload } from "./jwt.strategy";
@@ -23,6 +24,13 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   me(@Req() req: { user: JwtPayload }) {
     return this.authService.me(req.user.sub);
+  }
+
+  @Post("change-password")
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard)
+  changePassword(@Req() req: { user: JwtPayload }, @Body() body: ChangePasswordDto) {
+    return this.authService.changePassword(req.user.sub, body);
   }
 
   @Get("google")

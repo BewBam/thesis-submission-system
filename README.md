@@ -50,6 +50,8 @@ Giới hạn nộp bài: file PDF, tối đa 30 MB. Mỗi sinh viên có một b
 
 Chạy API và giao diện trên máy (không qua container) thì cần thêm Node.js 22.
 
+Cài trên VM Debian 12, không Docker: mục [Cách 3](#cách-3--vm-debian-12-không-docker) bên dưới.
+
 ### Cách 1 — Docker Compose
 
 Đứng ở thư mục gốc repo:
@@ -129,6 +131,264 @@ npm run dev
 ```
 
 Giao diện: http://localhost:5173. Vite chuyển `/api` sang `http://localhost:3000`.
+
+### Cách 3 — VM Debian 12 (không Docker)
+
+Máy đích đã kiểm tra: Debian GNU/Linux 12 (bookworm), hostname `NopLV`. Lệnh dưới chạy bằng `root`. Bỏ qua mục IP tĩnh và SSH nếu đã đăng nhập được vào máy.
+
+Thứ tự:
+
+```text
+IP tĩnh → SSH → Node.js 22 → PostgreSQL → clone source
+    → backend NestJS (systemd) → frontend React → Nginx
+    → DSpace (LXC) → HTTPS nếu có domain
+```
+
+Gói `postgresql` trên Debian 12 là PostgreSQL 15. Schema trong repo dùng SQL thông thường và chạy được trên bản này. Gói `nodejs` của Debian là bản 18, không dùng; cài Node.js 22 theo mục bên dưới.
+
+#### IP tĩnh
+
+Xem tên card mạng:
+
+```bash
+ip -br link
+```
+
+Sửa `/etc/network/interfaces` (đổi `eth0`, địa chỉ và gateway cho đúng mạng của VM):
+
+```text
+auto eth0
+iface eth0 inet static
+    address 192.168.1.50/24
+    gateway 192.168.1.1
+    dns-nameservers 1.1.1.1
+```
+
+```bash
+systemctl restart networking
+```
+
+Restart mạng có thể ngắt phiên SSH. Nên có console của hypervisor.
+
+#### SSH
+
+```bash
+apt update
+apt install -y openssh-server
+systemctl enable --now ssh
+```
+
+#### Node.js 22
+
+```bash
+apt install -y ca-certificates curl gnupg
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+apt install -y nodejs
+node -v
+```
+
+`node -v` phải là v22.
+
+#### PostgreSQL
+
+```bash
+apt install -y postgresql
+```
+
+Đặt mật khẩu riêng cho user database, không dùng mật khẩu mẫu của máy dev:
+
+```bash
+su - postgres -c "psql -c \"CREATE USER thesis_user WITH PASSWORD 'doi-mat-khau-nay';\""
+su - postgres -c "psql -c \"CREATE DATABASE thesis_portal OWNER thesis_user;\""
+```
+
+Debian mặc định cho phép `127.0.0.1` đăng nhập bằng mật khẩu (`scram-sha-256`). App nối TCP tới `127.0.0.1:5432`, không dùng `DATABASE_URL`.
+
+#### Clone source
+
+```bash
+apt install -y git
+git clone <url-repo> /opt/thesis-portal
+```
+
+Nếu không clone bằng Git, chép cây source vào `/opt/thesis-portal` sao cho có `backend/`, `frontend/` và `db/`.
+
+Nạp schema vào database trống:
+
+```bash
+PGPASSWORD='doi-mat-khau-nay' psql -h 127.0.0.1 -U thesis_user -d thesis_portal \
+  -f /opt/thesis-portal/db/thesis_portal_full.sql
+```
+
+Script này tạo bảng và các tài khoản mẫu (`admin1` / `admin123`, …). Đổi mật khẩu các tài khoản đó trước khi mở máy ra mạng.
+
+#### Backend NestJS
+
+```bash
+cd /opt/thesis-portal/backend
+npm install
+npm run build
+mkdir -p uploads
+```
+
+Tạo `/opt/thesis-portal/backend/.env`. Không ghi `DATABASE_URL`: khi `NODE_ENV=production`, biến đó bật SSL và Postgres trên cùng máy sẽ từ chối kết nối.
+
+```text
+NODE_ENV=production
+PORT=3000
+JWT_SECRET=<chuỗi-ngẫu-nhiên>
+DB_HOST=127.0.0.1
+DB_PORT=5432
+POSTGRES_DB=thesis_portal
+POSTGRES_USER=thesis_user
+POSTGRES_PASSWORD=doi-mat-khau-nay
+FRONTEND_URL=http://192.168.1.50
+```
+
+Tạo `JWT_SECRET`:
+
+```bash
+openssl rand -hex 32
+```
+
+`FRONTEND_URL` là địa chỉ người dùng mở trên trình duyệt (IP tĩnh hoặc domain), không có cổng `5173`.
+
+User hệ thống cho service, không chạy API bằng root:
+
+```bash
+useradd --system --home /opt/thesis-portal --shell /usr/sbin/nologin thesis
+chown -R thesis:thesis /opt/thesis-portal
+```
+
+`/etc/systemd/system/thesis-portal.service`:
+
+```ini
+[Unit]
+Description=Thesis Portal API
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=thesis
+Group=thesis
+WorkingDirectory=/opt/thesis-portal/backend
+EnvironmentFile=/opt/thesis-portal/backend/.env
+ExecStart=/usr/bin/node dist/main.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`WorkingDirectory` phải là `backend/`. File PDF nộp bài nằm ở `backend/uploads/`.
+
+```bash
+systemctl daemon-reload
+systemctl enable --now thesis-portal
+curl -s http://127.0.0.1:3000/health
+```
+
+Kỳ vọng: `{"status":"ok"}`. Nest lắng nghe `0.0.0.0:3000`. Không mở cổng 3000 và 5432 ra ngoài; người dùng chỉ vào qua Nginx.
+
+#### Frontend React
+
+```bash
+cd /opt/thesis-portal/frontend
+npm install
+npm run build
+chown -R thesis:thesis /opt/thesis-portal/frontend
+```
+
+Bản build nằm ở `frontend/dist`. Giao diện gọi `/api/...`. Ở máy dev, Vite bỏ tiền tố `/api` rồi chuyển sang Nest. Trên VM, Nginx làm việc đó.
+
+#### Nginx
+
+```bash
+apt install -y nginx
+```
+
+`/etc/nginx/sites-available/thesis-portal`:
+
+```nginx
+server {
+    listen 80;
+    server_name _;
+
+    root /opt/thesis-portal/frontend/dist;
+    index index.html;
+    client_max_body_size 35m;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:3000/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+```
+
+Dấu `/` cuối ở `proxy_pass` bỏ tiền tố `/api/`. PDF tối đa 30 MB nên `client_max_body_size` để 35m. Khi có domain, đổi `server_name _` thành tên miền.
+
+```bash
+rm -f /etc/nginx/sites-enabled/default
+ln -s /etc/nginx/sites-available/thesis-portal /etc/nginx/sites-enabled/thesis-portal
+nginx -t
+systemctl enable --now nginx
+systemctl reload nginx
+curl -s http://127.0.0.1/api/health
+```
+
+Mở `http://<ip-vm>/` trên trình duyệt. Đăng nhập `admin1` / `admin123`, rồi đổi mật khẩu.
+
+#### Kết nối DSpace (LXC)
+
+DSpace không cài trên VM này. Từ `NopLV` phải gọi được REST của LXC, ví dụ:
+
+```bash
+curl -sI http://<ip-lxc>/server/api
+```
+
+Trong Admin → System settings đặt:
+
+| Khóa | Giá trị |
+| --- | --- |
+| `dspace_api_base_url` | `http://<ip-lxc>/server` |
+| `dspace_api_user` | tài khoản DSpace |
+| `dspace_api_password` | mật khẩu DSpace |
+| `dspace_root_community_id` | UUID community gốc |
+
+Có thể ghi cùng các khóa đó vào `backend/.env` dưới tên `DSPACE_API_BASE_URL`, `DSPACE_API_USER`, `DSPACE_API_PASSWORD`, `DSPACE_ROOT_COMMUNITY_ID`, rồi `systemctl restart thesis-portal`. Giá trị trong System settings được dùng trước.
+
+Đợt nộp phải có `dspace_collection_id` là UUID thật trên DSpace. Archive vẫn ghi `archived` trong Postgres khi DSpace lỗi; `dspace_item_id` dạng `dev-item-...` nghĩa là chưa publish được.
+
+#### HTTPS / domain
+
+Khi đã có tên miền trỏ tới IP của VM:
+
+```bash
+apt install -y certbot python3-certbot-nginx
+certbot --nginx -d portal.example.edu.vn
+```
+
+Sửa `backend/.env`:
+
+```text
+FRONTEND_URL=https://portal.example.edu.vn
+GOOGLE_CALLBACK_URL=https://portal.example.edu.vn/api/auth/google/callback
+```
+
+Redirect URI trên Google Cloud phải trùng `GOOGLE_CALLBACK_URL`. Trình duyệt gọi `/api/auth/google`; Nginx bỏ `/api` rồi Nest nhận `/auth/google`.
+
+```bash
+systemctl restart thesis-portal
+```
 
 ### Biến môi trường
 
