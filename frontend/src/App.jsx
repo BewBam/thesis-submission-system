@@ -2930,7 +2930,7 @@ function App() {
                     </Form.Item>
                     ) : null}
                     <fieldset
-                      disabled={isFormReadOnly || (!periodSelected && !editingSubmissionId)}
+                      disabled={isFormReadOnly}
                       style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}
                     >
                     <Form.Item label="Email" name="email">

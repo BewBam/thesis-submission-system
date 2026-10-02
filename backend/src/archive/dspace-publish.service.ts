@@ -165,10 +165,24 @@ export class DspacePublishService {
       message: string;
     }> = [];
 
+    this.logger.log(
+      `Push to DSpace started: ${ids.length} submission(s), collection ${collectionId}`
+    );
+
     for (const submissionId of ids) {
+      this.logger.log(`Push to DSpace: submission ${submissionId} → collection ${collectionId}`);
       try {
         const published = await this.publishApprovedSubmission(submissionId, collectionId);
         const ok = Boolean(published.dspaceItemId) && published.mode !== "skipped";
+        if (ok) {
+          this.logger.log(
+            `Push to DSpace succeeded: submission ${submissionId}, item ${published.dspaceItemId}, pdf ${published.bitstreamUploaded ? "uploaded" : "not uploaded"}`
+          );
+        } else {
+          this.logger.warn(
+            `Push to DSpace did not publish submission ${submissionId}: ${published.message || published.mode}. DSpace status left pending.`
+          );
+        }
         results.push({
           submissionId,
           ok,
@@ -178,15 +192,18 @@ export class DspacePublishService {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        await this.db.query(
-          `UPDATE submissions
-           SET dspace_publish_status = 'failed'
-           WHERE id = $1::uuid`,
-          [submissionId]
+        this.logger.error(
+          `Push to DSpace failed: submission ${submissionId}, collection ${collectionId}: ${message}`
         );
+        await this.markPublishStatus(submissionId, "pending", null);
         results.push({ submissionId, ok: false, message });
       }
     }
+
+    const okCount = results.filter((row) => row.ok).length;
+    this.logger.log(
+      `Push to DSpace finished: ${okCount} published, ${results.length - okCount} not published (status stays pending)`
+    );
 
     return { results };
   }
@@ -284,12 +301,11 @@ export class DspacePublishService {
               : "DSpace item exists but PDF upload failed — check logs"
           };
         } catch (error) {
-          this.logger.warn(
-            `PDF retry for item ${row.dspace_item_id} failed: ${
-              error instanceof Error ? error.message : error
-            }`
+          const detail = error instanceof Error ? error.message : String(error);
+          this.logger.error(
+            `Push to DSpace PDF upload failed: submission ${submissionId}, item ${row.dspace_item_id}: ${detail}. DSpace status left pending.`
           );
-          await this.markPublishStatus(submissionId, "failed", row.dspace_item_id);
+          await this.markPublishStatus(submissionId, "pending", row.dspace_item_id);
           return {
             dspaceItemId: row.dspace_item_id,
             mode: "dspace",
@@ -339,12 +355,14 @@ export class DspacePublishService {
         pdfFileName: row.thesis_file_name
       });
 
-      const status =
-        published.mode === "dspace" && published.id && !published.id.startsWith("dev-item-")
-          ? "published"
-          : published.mode === "dev"
-            ? "pending"
-            : "failed";
+      const publishedForReal =
+        published.mode === "dspace" && Boolean(published.id) && !published.id.startsWith("dev-item-");
+      const status = publishedForReal ? "published" : "pending";
+      if (!publishedForReal) {
+        this.logger.warn(
+          `Push to DSpace did not create a real item for submission ${submissionId} (mode ${published.mode}, id ${published.id || "none"}). DSpace status left pending.`
+        );
+      }
       await this.markPublishStatus(submissionId, status, published.id);
 
       return {
@@ -360,7 +378,7 @@ export class DspacePublishService {
               : "Published item metadata to DSpace (PDF missing or upload failed — check logs)"
       };
     } catch (error) {
-      await this.markPublishStatus(submissionId, "failed", null);
+      await this.markPublishStatus(submissionId, "pending", null);
       throw error;
     }
   }

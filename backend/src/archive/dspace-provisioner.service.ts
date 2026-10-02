@@ -420,6 +420,10 @@ export class DspaceProvisionerService {
 
     if (!response.ok) {
       const text = await response.text();
+      const preview = text.replace(/\s+/g, " ").trim().slice(0, 500);
+      this.logger.error(
+        `DSpace ${method} ${path} failed (${response.status})${retried ? " after CSRF refresh" : ""}: ${preview || "(empty body)"}`
+      );
       throw new Error(`DSpace ${method} ${path} failed (${response.status}): ${text}`);
     }
     if (response.status === 204) {
@@ -505,6 +509,10 @@ export class DspaceProvisionerService {
                     }
 
                     if (status < 200 || status >= 300) {
+                      const preview = text.replace(/\s+/g, " ").trim().slice(0, 500);
+                      this.logger.error(
+                        `DSpace POST ${path} failed (${status})${retried ? " after CSRF refresh" : ""}: ${preview || "(empty body)"}`
+                      );
                       reject(new Error(`DSpace POST ${path} failed (${status}): ${text}`));
                       return;
                     }

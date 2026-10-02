@@ -566,11 +566,20 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
       }
       const results = payload?.results || [];
       const okCount = results.filter((r) => r.ok).length;
-      const failCount = results.length - okCount;
-      if (failCount === 0) {
+      const failed = results.filter((r) => !r.ok);
+      if (failed.length === 0) {
         message.success(`Pushed ${okCount} submission(s) to DSpace`);
       } else {
-        message.warning(`Pushed ${okCount} ok, ${failCount} failed`);
+        const detail = failed
+          .map((row) => row.message)
+          .filter(Boolean)
+          .slice(0, 2)
+          .join(" ");
+        message.warning(
+          detail
+            ? `Pushed ${okCount} ok, ${failed.length} failed. ${detail}`
+            : `Pushed ${okCount} ok, ${failed.length} failed`
+        );
       }
       setPushCollectionModalOpen(false);
       setTargetCollectionId(null);

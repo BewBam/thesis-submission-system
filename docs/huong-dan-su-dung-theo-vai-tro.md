@@ -66,7 +66,7 @@ Luồng mặc định, từ lúc mở đợt đến khi bài có trên DSpace. M
    - Mọi người **Approve** → bài **vẫn** `reviewing` và vào hàng đợi thư viện.
 4. **Nhân viên thư viện** **Approve** → `approved`, hoặc **Reject** (có lý do) → `rejected`.
 5. **Giám đốc**, với bài `approved`: **Archive** → `archived` trên cổng (chưa tạo item DSpace), hoặc **Reject** (có lý do) → `rejected`.
-6. **Thư viện hoặc admin** mở **Archive configuration → Push to DSpace**, lọc bài `archived` còn `pending`, chọn collection, rồi **Push selected**. Push thành công thì có `dspace_item_id`; lỗi thì DSpace status là `failed`. Trạng thái cổng vẫn là `archived`.
+6. **Thư viện hoặc admin** mở **Archive configuration → Push to DSpace**, lọc bài `archived` còn `pending`, chọn collection, rồi **Push selected**. Push thành công thì có `dspace_item_id`. Lỗi thì DSpace status vẫn là `pending` để đẩy lại; chi tiết nằm trong log backend. Trạng thái cổng vẫn là `archived`.
 
 **Nhánh rẽ**
 
@@ -108,7 +108,7 @@ Luồng mặc định, từ lúc mở đợt đến khi bài có trên DSpace. M
 
 **Bước 2 — Nhập thông tin luận văn**
 
-Sau khi chọn đợt nộp, điền các mục sau:
+Các mục dưới đây nhập được ngay, không cần chọn đợt trước và không bắt theo thứ tự. **Save draft** và **Submit thesis** vẫn cần đã chọn đợt nộp.
 
 | Trường | Mô tả |
 |--------|--------|
