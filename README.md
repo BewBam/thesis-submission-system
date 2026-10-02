@@ -146,38 +146,6 @@ IP tĩnh → SSH → Node.js 22 → PostgreSQL → clone source
 
 Gói `postgresql` trên Debian 12 là PostgreSQL 15. Schema trong repo dùng SQL thông thường và chạy được trên bản này. Gói `nodejs` của Debian là bản 18, không dùng; cài Node.js 22 theo mục bên dưới.
 
-#### IP tĩnh
-
-Xem tên card mạng:
-
-```bash
-ip -br link
-```
-
-Sửa `/etc/network/interfaces` (đổi `eth0`, địa chỉ và gateway cho đúng mạng của VM):
-
-```text
-auto eth0
-iface eth0 inet static
-    address 192.168.1.50/24
-    gateway 192.168.1.1
-    dns-nameservers 1.1.1.1
-```
-
-```bash
-systemctl restart networking
-```
-
-Restart mạng có thể ngắt phiên SSH. Nên có console của hypervisor.
-
-#### SSH
-
-```bash
-apt update
-apt install -y openssh-server
-systemctl enable --now ssh
-```
-
 #### Node.js 22
 
 ```bash
@@ -208,16 +176,16 @@ Debian mặc định cho phép `127.0.0.1` đăng nhập bằng mật khẩu (`s
 
 ```bash
 apt install -y git
-git clone <url-repo> /opt/thesis-portal
+git clone <url-repo> /opt/thesis_portal
 ```
 
-Nếu không clone bằng Git, chép cây source vào `/opt/thesis-portal` sao cho có `backend/`, `frontend/` và `db/`.
+Nếu không clone bằng Git, chép cây source vào `/opt/thesis_portal` sao cho có `backend/`, `frontend/` và `db/`.
 
 Nạp schema vào database trống:
 
 ```bash
 PGPASSWORD='doi-mat-khau-nay' psql -h 127.0.0.1 -U thesis_user -d thesis_portal \
-  -f /opt/thesis-portal/db/thesis_portal_full.sql
+  -f /opt/thesis_portal/db/thesis_portal_full.sql
 ```
 
 Script này tạo bảng và các tài khoản mẫu (`admin1` / `admin123`, …). Đổi mật khẩu các tài khoản đó trước khi mở máy ra mạng.
@@ -225,13 +193,13 @@ Script này tạo bảng và các tài khoản mẫu (`admin1` / `admin123`, …
 #### Backend NestJS
 
 ```bash
-cd /opt/thesis-portal/backend
+cd /opt/thesis_portal/backend
 npm install
 npm run build
 mkdir -p uploads
 ```
 
-Tạo `/opt/thesis-portal/backend/.env`. Không ghi `DATABASE_URL`: khi `NODE_ENV=production`, biến đó bật SSL và Postgres trên cùng máy sẽ từ chối kết nối.
+Tạo `/opt/thesis_portal/backend/.env`. Không ghi `DATABASE_URL`: khi `NODE_ENV=production`, biến đó bật SSL và Postgres trên cùng máy sẽ từ chối kết nối.
 
 ```text
 NODE_ENV=production
@@ -256,8 +224,8 @@ openssl rand -hex 32
 User hệ thống cho service, không chạy API bằng root:
 
 ```bash
-useradd --system --home /opt/thesis-portal --shell /usr/sbin/nologin thesis
-chown -R thesis:thesis /opt/thesis-portal
+useradd --system --home /opt/thesis_portal --shell /usr/sbin/nologin thesis
+chown -R thesis:thesis /opt/thesis_portal
 ```
 
 `/etc/systemd/system/thesis-portal.service`:
@@ -271,8 +239,8 @@ After=network.target postgresql.service
 Type=simple
 User=thesis
 Group=thesis
-WorkingDirectory=/opt/thesis-portal/backend
-EnvironmentFile=/opt/thesis-portal/backend/.env
+WorkingDirectory=/opt/thesis_portal/backend
+EnvironmentFile=/opt/thesis_portal/backend/.env
 ExecStart=/usr/bin/node dist/main.js
 Restart=on-failure
 RestartSec=5
@@ -294,10 +262,10 @@ Kỳ vọng: `{"status":"ok"}`. Nest lắng nghe `0.0.0.0:3000`. Không mở c�
 #### Frontend React
 
 ```bash
-cd /opt/thesis-portal/frontend
+cd /opt/thesis_portal/frontend
 npm install
 npm run build
-chown -R thesis:thesis /opt/thesis-portal/frontend
+chown -R thesis:thesis /opt/thesis_portal/frontend
 ```
 
 Bản build nằm ở `frontend/dist`. Giao diện gọi `/api/...`. Ở máy dev, Vite bỏ tiền tố `/api` rồi chuyển sang Nest. Trên VM, Nginx làm việc đó.
@@ -315,7 +283,7 @@ server {
     listen 80;
     server_name _;
 
-    root /opt/thesis-portal/frontend/dist;
+    root /opt/thesis_portal/frontend/dist;
     index index.html;
     client_max_body_size 35m;
 

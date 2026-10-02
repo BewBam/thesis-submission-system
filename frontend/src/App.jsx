@@ -1213,6 +1213,16 @@ function App() {
     }
   ];
 
+  const openQueueSubmissionDetail = (record) => {
+    const full = staffSubmissions.find((item) => item.id === record.id);
+    setStaffDetailRecord(
+      full || {
+        ...record,
+        status: record.status || record.submission_status
+      }
+    );
+  };
+
   const buildStageQueueColumns = (loadingId, onApprove, onReject, approveLabel) => [
     {
       title: "Title",
@@ -1252,9 +1262,12 @@ function App() {
     {
       title: "Actions",
       key: "actions",
-      width: 260,
+      width: 320,
       render: (_value, record) => (
         <Space>
+          <Button type="link" size="small" onClick={() => openQueueSubmissionDetail(record)}>
+            Detail
+          </Button>
           <Button type="primary" loading={loadingId === record.id} onClick={() => onApprove(record.id)}>
             {approveLabel}
           </Button>
@@ -2526,9 +2539,12 @@ function App() {
     {
       title: "Actions",
       key: "actions",
-      width: 220,
+      width: 300,
       render: (_value, record) => (
         <Space>
+          <Button type="link" size="small" onClick={() => openQueueSubmissionDetail(record)}>
+            Detail
+          </Button>
           <Button type="primary" loading={loadingId === record.id} onClick={() => onArchive(record.id)}>
             Archive
           </Button>
@@ -3738,9 +3754,9 @@ function App() {
               </Descriptions.Item>
               <Descriptions.Item label="Workflow status">
                 <Tag
-                  color={thesisStatusColor(staffDetailRecord.status)}
+                  color={thesisStatusColor(staffDetailRecord.status || staffDetailRecord.submission_status)}
                 >
-                  {staffDetailRecord.status}
+                  {staffDetailRecord.status || staffDetailRecord.submission_status}
                 </Tag>
               </Descriptions.Item>
               <Descriptions.Item label="DSpace item ID">

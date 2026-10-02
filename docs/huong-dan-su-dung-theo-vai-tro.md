@@ -15,8 +15,9 @@ Cổng nộp luận văn hỗ trợ sinh viên nộp luận văn/luận án đi�
 2. Nhập **Tên đăng nhập** và **Mật khẩu**.
 3. Nhấn **Login** (Đăng nhập).
 4. Sau khi đăng nhập thành công, hệ thống hiển thị **Dashboard** tương ứng với vai trò của tài khoản.
+5. Đổi mật khẩu bằng **Change password** trên thanh đầu trang. Cần mật khẩu hiện tại nếu tài khoản đăng nhập bằng mật khẩu.
 
-**Lưu ý:** Mỗi tài khoản chỉ thấy chức năng thuộc vai trò được cấp. Nếu quên mật khẩu, liên hệ quản trị viên để được cấp lại.
+**Lưu ý:** Mỗi tài khoản chỉ thấy chức năng thuộc vai trò được cấp. Nếu quên mật khẩu, liên hệ quản trị viên để được cấp lại. Khi quản trị viên đặt **login_method** là `google`, màn đăng nhập dùng **Login with Google** cho tài khoản `@hcmut.edu.vn` đã được xác minh.
 
 ### 3. Tài khoản khởi tạo
 
@@ -37,9 +38,11 @@ Phản biện: Duyệt hoặc Từ chối
         ↓
 Nhân viên thư viện: Tiếp nhận — Duyệt hoặc Từ chối
         ↓
-ĐÃ DUYỆT (approved)  →  Giám đốc: Lưu trữ (archived)
+ĐÃ DUYỆT (approved)  →  Giám đốc: Lưu trữ (archived) hoặc Từ chối (rejected)
         hoặc
-BỊ TỪ CHỐI (rejected)  →  Sinh viên chỉnh sửa và nộp lại
+BỊ TỪ CHỐI (rejected)  →  Sinh viên sửa, xóa, hoặc nộp lại
+
+Bài archived nằm trên cổng cho đến khi thư viện hoặc admin đẩy ở Push to DSpace.
 ```
 
 **Các trạng thái chính:**
@@ -47,12 +50,34 @@ BỊ TỪ CHỐI (rejected)  →  Sinh viên chỉnh sửa và nộp lại
 | Trạng thái | Ý nghĩa |
 |------------|---------|
 | draft | Bản nháp — chưa gửi phản biện |
-| reviewing | Đang trong quá trình phản biện / chờ thư viện |
+| reviewing | Đang phản biện, hoặc mọi phản biện đã duyệt và đang chờ thư viện |
 | approved | Thư viện đã duyệt tiếp nhận |
-| rejected | Bị từ chối (phản biện hoặc thư viện) |
-| archived | Đã lưu trữ (sau khi giám đốc xác nhận) |
+| rejected | Bị từ chối (phản biện, thư viện, hoặc giám đốc) |
+| archived | Giám đốc đã lưu trên cổng; chưa chắc đã có item trên DSpace |
 
-### 5. Giới hạn kỹ thuật quan trọng
+### 5. Flow chính
+
+Luồng mặc định, từ lúc mở đợt đến khi bài có trên DSpace. Mỗi bước chỉ một vai trò thao tác.
+
+1. **Admin** tạo tài khoản student, reviewer, library_staff, director. Student và reviewer phải gắn khoa. **Thư viện hoặc admin** tạo học kỳ, mở đợt nộp (**open**), và gắn collection DSpace nếu sẽ đẩy lưu trữ.
+2. **Sinh viên** chọn học kỳ và đợt đang mở, điền form, chọn tác giả và phản biện, tải PDF. Có thể **Save draft** (`draft`). **Submit thesis** chuyển bài sang `reviewing` và giao cho các phản biện đã chọn.
+3. **Từng phản biện** **Approve** hoặc **Reject** (reject bắt buộc có lý do), mỗi người một lần.
+   - Một người **Reject** → bài thành `rejected`. Dừng tại đây cho đến khi sinh viên nộp lại hoặc xóa.
+   - Mọi người **Approve** → bài **vẫn** `reviewing` và vào hàng đợi thư viện.
+4. **Nhân viên thư viện** **Approve** → `approved`, hoặc **Reject** (có lý do) → `rejected`.
+5. **Giám đốc**, với bài `approved`: **Archive** → `archived` trên cổng (chưa tạo item DSpace), hoặc **Reject** (có lý do) → `rejected`.
+6. **Thư viện hoặc admin** mở **Archive configuration → Push to DSpace**, lọc bài `archived` còn `pending`, chọn collection, rồi **Push selected**. Push thành công thì có `dspace_item_id`; lỗi thì DSpace status là `failed`. Trạng thái cổng vẫn là `archived`.
+
+**Nhánh rẽ**
+
+| Việc xảy ra | Hệ thống làm gì |
+|-------------|-----------------|
+| Sinh viên nộp lại bài `rejected` hoặc `approved` | **Submit again** đưa bài về `reviewing` và tạo vòng phản biện mới |
+| Chưa ai review (mọi quyết định còn `pending`), hoặc bài `rejected` | Người nộp được **Delete** |
+| Đang `reviewing` và mọi phản biện còn `pending` | Người nộp được **Revert to draft** |
+| Bài `archived` | Sinh viên không sửa, không xóa |
+
+### 6. Giới hạn kỹ thuật quan trọng
 
 - File luận văn: **PDF**, tối đa **30 MB**.
 - Mỗi sinh viên có **một bản nháp** và tối đa **một luận văn đang nộp** (không ở trạng thái nháp) tại một thời điểm. Nộp bài sẽ chuyển bản nháp sang quy trình phản biện.
@@ -64,9 +89,9 @@ BỊ TỪ CHỐI (rejected)  →  Sinh viên chỉnh sửa và nộp lại
 
 ### 1. Chức năng chính
 
-- Chọn khoa, học kỳ và đợt nộp luận văn.
-- Nhập thông tin luận văn (tiếng Việt, tiếng Anh, người hướng dẫn, ngành, năm, tóm tắt).
-- Chọn đồng tác giả và phản biện.
+- Chọn học kỳ và đợt nộp (khoa lấy từ tài khoản, không đổi trên form).
+- Nhập thông tin luận văn (tiếng Việt, tiếng Anh, người hướng dẫn, ngành, năm, loại tài liệu, tóm tắt).
+- Tìm và chọn đồng tác giả, phản biện theo tên hoặc username.
 - Tải file PDF luận văn.
 - Lưu bản nháp hoặc nộp chính thức.
 - Theo dõi trạng thái và quyết định phản biện.
@@ -77,7 +102,7 @@ BỊ TỪ CHỐI (rejected)  →  Sinh viên chỉnh sửa và nộp lại
 
 **Bước 1 — Chọn đợt nộp**
 
-1. Tại **Step 1 — Submission period**, chọn **Faculty** (Khoa).
+1. **Faculty** (Khoa) đã gán cho tài khoản và không sửa được trên form. Nếu trống, nhờ quản trị viên gán khoa.
 2. Chọn **Semester** (Học kỳ).
 3. Chọn **Submission period** (Đợt nộp đang mở). Đợt nộp hiển thị ngày đóng.
 
@@ -93,8 +118,9 @@ Sau khi chọn đợt nộp, điền các mục sau:
 | Advisor(s) | Người hướng dẫn (có thể nhiều người, phân cách bằng dấu chấm phẩy) |
 | Major | Ngành / chuyên ngành |
 | Year | Năm tốt nghiệp / năm nộp |
-| Authors | Chọn tài khoản sinh viên là tác giả (bắt buộc có chính mình) |
-| Reviewers | Chọn ít nhất một phản biện |
+| Authors | Tìm theo tên hoặc username, rồi chọn tài khoản sinh viên (bắt buộc có chính mình) |
+| Reviewers | Tìm theo tên hoặc username, chọn ít nhất một phản biện |
+| Type | Loại tài liệu: **Thesis** (mặc định), **Dissertation**, hoặc **Graduation thesis** |
 | Abstract | Tóm tắt luận văn |
 | Thesis PDF | Kéo thả hoặc chọn file PDF (tối đa 30 MB) |
 
@@ -107,7 +133,7 @@ Sau khi chọn đợt nộp, điền các mục sau:
 
 **Form nhập liệu:** Người nộp tạo/sửa draft và submit. Form **không** tự điền khi mở trang; nhấn **Edit** trong Detail để tiếp tục draft (có autofill faculty / semester / period). Đồng tác giả không tạo draft, không submit, không edit — chỉ **Detail**.
 
-**Bảng My submissions:** Draft và bài đã nộp của bạn, cùng bài bạn là đồng tác giả (kể cả draft). Actions: **Detail** — trong Detail có Edit / Delete (submitter) và **Submit** cho draft.
+**Bảng My submissions:** Draft và bài đã nộp của bạn, cùng bài bạn là đồng tác giả (kể cả draft). Actions của người nộp: **Edit**, **Delete** (khi được phép), **Detail**. Draft còn nút **Submit** trong Detail. Nút **Delete** cũng hiện trên **Submission details**.
 
 ### 4. Khi nào được chỉnh sửa / xóa / chuyển về nháp?
 
@@ -168,7 +194,7 @@ Sau khi chọn đợt nộp, điền các mục sau:
 
 - Chỉ phản biện được bài ở trạng thái **đang phản biện** và còn **pending** (chưa quyết định).
 - Nếu **một phản biện từ chối**, luận văn chuyển sang **bị từ chối**; sinh viên phải chỉnh sửa và nộp lại.
-- Khi **tất cả phản biện đã duyệt** (không còn ai pending), bài chuyển sang hàng đợi **tiếp nhận thư viện**.
+- Khi **tất cả phản biện đã duyệt** (không còn ai pending), status vẫn là **reviewing** và bài vào hàng đợi **tiếp nhận thư viện**.
 - Mỗi phản biện chỉ quyết định **một lần** cho mỗi lượt nộp; không đổi quyết định sau khi đã submit.
 
 ### 5. Mẹo sử dụng
@@ -212,10 +238,11 @@ Thao tác trên từng bài:
 
 Nhân viên thư viện **được phép chỉnh sửa** cấu hình:
 
-- **Universities** (Trường / đại học)
-- **Faculties** (Khoa) — mã, tên, liên kết DSpace
+- **Faculties** (Khoa)
 - **Semesters** (Học kỳ) — theo từng khoa
-- **Submission periods** (Đợt nộp) — thời gian mở/đóng, trạng thái open/closed/draft/archived
+- **Submission periods** (Đợt nộp) — thời gian mở/đóng, trạng thái open/closed/draft
+
+Tab **Push to DSpace** đẩy các bài **archived** lên collection. Lọc theo khoa, học kỳ, đợt và DSpace status (`pending`, `published`, `failed`), chọn bài, rồi **Push selected**. Bài `draft`, `reviewing`, `rejected` không nằm trong hàng đợi này.
 
 **Thao tác thường dùng:**
 
@@ -247,8 +274,9 @@ Liệt kê bài ở trạng thái **approved** (thư viện đã duyệt tiếp 
 
 | Nút | Tác dụng |
 |-----|----------|
-| Detail | Xem chi tiết luận văn |
-| Archive | Xác nhận lưu trữ — chuyển sang **archived** và **publish item lên DSpace** (auto-login nếu đã cấu hình) |
+| Detail | Xem chi tiết, file PDF và lịch sử |
+| Archive | Lưu trên cổng — chuyển sang **archived**. Chưa tạo item DSpace |
+| Reject | Từ chối bài **approved** — nhập lý do, chuyển sang **rejected** |
 
 **Bảng All submissions:** Tra cứu mọi luận văn trong hệ thống.
 
@@ -260,8 +288,8 @@ Giám đốc chỉ **xem** cấu hình khoa, học kỳ, đợt nộp — **khô
 
 1. Nhân viên thư viện duyệt tiếp nhận → **approved**.
 2. Giám đốc kiểm tra metadata và file.
-3. Giám đốc nhấn **Archive** để hoàn tất lưu trữ và đẩy lên DSpace.
-4. Bài ở trạng thái **archived** — sinh viên không chỉnh sửa được nữa; `dspace_item_id` được lưu nếu publish thành công.
+3. Giám đốc nhấn **Archive** để lưu trên cổng. Muốn trả lại bài thì nhấn **Reject** và nhập lý do.
+4. Bài **archived** — sinh viên không chỉnh sửa được. Nhân viên thư viện hoặc admin đẩy lên DSpace ở **Archive configuration → Push to DSpace**. `dspace_item_id` có sau khi push thành công.
 5. Cách kiểm tra bằng API: [`huong-dan-kiem-tra-archive-dspace.md`](./huong-dan-kiem-tra-archive-dspace.md).
 
 ---
@@ -270,19 +298,20 @@ Giám đốc chỉ **xem** cấu hình khoa, học kỳ, đợt nộp — **khô
 
 ### 1. Chức năng chính
 
-- Quản lý tài khoản người dùng.
-- Cấu hình quyền theo vai trò.
-- Cấu hình tham số hệ thống.
-- (Qua panel thư viện) Cấu hình lưu trữ nếu cần.
+- Quản lý tài khoản người dùng, gồm nhập từ file.
+- Cấu hình quyền theo vai trò, form nộp bài, email và tham số hệ thống.
+- Tạo hoặc sửa bài nộp thay sinh viên.
+- Cấu hình lưu trữ và **Push to DSpace**.
 
-**Lưu ý:** Quản trị viên **không** trực tiếp phản biện hay tiếp nhận luận văn trong quy trình nghiệp vụ hàng ngày.
+**Lưu ý:** Quản trị viên không phản biện hay tiếp nhận luận văn. Dashboard có ba tab: **Administration**, **Submissions**, **Archive configuration**.
 
 ### 2. Tab Manage users (Quản lý người dùng)
 
 | Thao tác | Mô tả |
 |----------|--------|
-| Create user | Tạo tài khoản mới (username, mật khẩu, tên hiển thị, vai trò) |
-| Edit | Sửa thông tin, đổi vai trò, kích hoạt/vô hiệu hóa |
+| Create user | Tạo tài khoản (username, mật khẩu, tên hiển thị, vai trò). Student và reviewer bắt buộc chọn **faculty** |
+| Import | Nhập nhiều tài khoản từ file; xem trước rồi xác nhận. Student/reviewer thiếu khoa trong file thì chọn khoa chung lúc import |
+| Edit | Sửa thông tin, khoa, vai trò, kích hoạt/vô hiệu hóa |
 | Search / Filter | Lọc theo tên, vai trò, trạng thái active/disabled |
 
 **Vai trò có thể gán:** student, reviewer, library_staff, director, admin.
@@ -322,11 +351,19 @@ Nhấn **Save permissions** để lưu.
 | library_support_phone | Số điện thoại hỗ trợ thư viện |
 | maintenance_mode | Bật true: chỉ admin đăng nhập được |
 
-Nhấn **Save** sau khi chỉnh sửa.
+Nhấn **Save** sau khi chỉnh sửa. Tab **Email configuration** đặt SMTP và mẫu thư quy trình.
 
-**DSpace:** khi Giám đốc nhấn **Archive**, hệ thống tự login DSpace (nếu đã cấu hình user/password) và đẩy item lên collection của đợt nộp. Library Approve chỉ chuyển trạng thái `approved`, không publish.
+**login_method:** `username` (mật khẩu) hoặc `google` (đăng nhập Google `@hcmut.edu.vn`).
 
-### 5. Mẹo sử dụng
+**DSpace:** Giám đốc **Archive** chỉ chuyển `archived` trên cổng. Đẩy item (và PDF) làm ở **Archive configuration → Push to DSpace**, sau khi đã cấu hình user/password hoặc token. Library Approve chỉ chuyển `approved`, không publish.
+
+### 5. Tab Submissions
+
+- **All submissions:** xem mọi bài. **Create submission** / **Edit** mở form thay sinh viên. Semester và Submission period hiện **tên**, không hiện id. **Full detail** xem hoặc xóa bài, kể cả bài archived đã gắn DSpace.
+- **Authors** và **Reviewers** trên form tìm theo tên hoặc username.
+- **Submission fields:** bật/tắt, đổi nhãn và thứ tự trường form nộp bài.
+
+### 6. Mẹo sử dụng
 
 - Tắt **maintenance_mode** trừ khi bảo trì có kế hoạch.
 - Không chia sẻ mật khẩu tài khoản admin.
@@ -345,6 +382,7 @@ Nhấn **Save** sau khi chỉnh sửa.
 | File PDF bị lỗi | Đúng định dạng PDF, dưới 30 MB |
 | Phản biện không thấy bài | Sinh viên chưa chọn đúng reviewer; bài chưa Submit |
 | Thư viện không thấy hàng đợi | Chưa đủ phản biện duyệt; còn phản biện pending hoặc có người reject |
+| Đã Archive nhưng chưa thấy trên DSpace | Archive chỉ lưu trên cổng. Vào **Push to DSpace**, lọc status `pending`, rồi push |
 
 ---
 
