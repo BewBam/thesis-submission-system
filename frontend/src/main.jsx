@@ -1,16 +1,25 @@
-import React from "react";
+import React, { useEffect } from "react";
 import ReactDOM from "react-dom/client";
 import { ConfigProvider } from "antd";
+import enUS from "antd/locale/en_US";
+import viVN from "antd/locale/vi_VN";
 import dayjs from "dayjs";
 import App from "./App";
+import { I18nProvider, useI18n } from "./i18n/I18nProvider";
 
-// Required for Ant Design DatePicker / RangePicker
 import "dayjs/locale/en";
-dayjs.locale("en");
+import "dayjs/locale/vi";
 
-ReactDOM.createRoot(document.getElementById("root")).render(
-  <React.StrictMode>
+function LocalizedApp() {
+  const { lang } = useI18n();
+
+  useEffect(() => {
+    dayjs.locale(lang === "vi" ? "vi" : "en");
+  }, [lang]);
+
+  return (
     <ConfigProvider
+      locale={lang === "vi" ? viVN : enUS}
       theme={{
         token: {
           colorPrimary: "#1488D8",
@@ -22,5 +31,13 @@ ReactDOM.createRoot(document.getElementById("root")).render(
     >
       <App />
     </ConfigProvider>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <React.StrictMode>
+    <I18nProvider>
+      <LocalizedApp />
+    </I18nProvider>
   </React.StrictMode>
 );

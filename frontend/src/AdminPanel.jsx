@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { SearchOutlined, DownloadOutlined, UploadOutlined } from "@ant-design/icons";
 import LibraryArchivePanel from "./LibraryArchivePanel.jsx";
+import { translateApiMessage } from "./i18n/api";
+import { useI18n } from "./i18n/I18nProvider";
+import { fieldDisplayLabel, formatDateTime, inputTypeText, roleText, statusText } from "./i18n/labels";
 import {
   Button,
   Divider,
@@ -58,10 +61,6 @@ async function parseResponse(response) {
   }
 }
 
-function roleLabel(role) {
-  return ROLE_LABELS[role] || role;
-}
-
 function isEmailSettingKey(key) {
   return String(key || "").startsWith("email_") || String(key || "").startsWith("smtp_");
 }
@@ -95,13 +94,13 @@ function sortEmailTechnical(items) {
   return [...items].sort((a, b) => (rank.get(a.key) ?? 99) - (rank.get(b.key) ?? 99));
 }
 
-function renderSettingControl(item) {
+function renderSettingControl(item, t) {
   if (item.key === "login_method") {
     return (
       <Select
         options={[
-          { value: "username", label: "username (password)" },
-          { value: "google", label: "google (@hcmut.edu.vn)" }
+          { value: "username", label: t("username (password)") },
+          { value: "google", label: t("google (@hcmut.edu.vn)") }
         ]}
       />
     );
@@ -125,7 +124,7 @@ function renderSettingControl(item) {
     item.key === "dspace_api_token" ||
     item.key === "smtp_password"
   ) {
-    return <Input.Password placeholder={item.sensitive ? "Unchanged if left blank / masked" : ""} />;
+    return <Input.Password placeholder={item.sensitive ? t("Unchanged if left blank / masked") : ""} />;
   }
   if (item.key.startsWith("email_body_")) {
     return <Input.TextArea rows={8} />;
@@ -141,6 +140,8 @@ export default function AdminPanel({
   emailOnly = false,
   formFieldsOnly = false
 }) {
+  const { t, lang } = useI18n();
+  const tr = (value) => translateApiMessage(value, t);
   const [activeTab, setActiveTab] = useState("users");
   const [users, setUsers] = useState([]);
   const [roles, setRoles] = useState([]);
@@ -209,7 +210,7 @@ export default function AdminPanel({
       }
       setUsers(payload);
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setLoadingUsers(false);
     }
@@ -224,7 +225,7 @@ export default function AdminPanel({
       }
       setFaculties(payload);
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     }
   }, [auth.token]);
 
@@ -243,7 +244,7 @@ export default function AdminPanel({
         setRolePermissions({ ...current.permissions });
       }
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setLoadingRoles(false);
     }
@@ -270,7 +271,7 @@ export default function AdminPanel({
       settingsForm.setFieldsValue(systemValues);
       emailForm.setFieldsValue(emailValues);
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setLoadingSettings(false);
     }
@@ -288,7 +289,7 @@ export default function AdminPanel({
       }
       setFormFields(Array.isArray(payload) ? payload : []);
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setLoadingFormFields(false);
     }
@@ -353,7 +354,7 @@ export default function AdminPanel({
       link.remove();
       URL.revokeObjectURL(url);
     } catch (error) {
-      message.error(error.message || "Unable to export users");
+      message.error(tr(error.message || "Unable to export users"));
     } finally {
       setExportingUsers(false);
     }
@@ -379,7 +380,7 @@ export default function AdminPanel({
       link.remove();
       URL.revokeObjectURL(url);
     } catch (error) {
-      message.error(error.message || "Unable to download template");
+      message.error(tr(error.message || "Unable to download template"));
     } finally {
       setDownloadingTemplate(false);
     }
@@ -403,12 +404,12 @@ export default function AdminPanel({
       setImportFacultyId(null);
       setImportPreview({ ...payload, fileName: file.name });
       if (!payload.toImportCount && payload.errorCount) {
-        message.warning("No valid users to import. Check the skipped rows.");
+        message.warning(t("No valid users to import. Check the skipped rows."));
       } else if (!payload.toImportCount) {
-        message.info("The file had no data rows.");
+        message.info(t("The file had no data rows."));
       }
     } catch (error) {
-      message.error(error.message || "Unable to read the file");
+      message.error(tr(error.message || "Unable to read the file"));
       setImportPreview(null);
     } finally {
       setPreviewingImport(false);
@@ -419,11 +420,11 @@ export default function AdminPanel({
   const confirmImportUsers = async () => {
     const rows = importPreview?.toImport || [];
     if (!rows.length) {
-      message.warning("Upload a file and review the list first.");
+      message.warning(t("Upload a file and review the list first."));
       return;
     }
     if (importPreview?.requiresFaculty && !importFacultyId) {
-      message.warning("Choose a faculty for students and reviewers that have none in the file.");
+      message.warning(t("Choose a faculty for students and reviewers that have none in the file."));
       return;
     }
     setImportingUsers(true);
@@ -453,13 +454,13 @@ export default function AdminPanel({
       setImportResult(payload);
       setImportPreview(null);
       if (payload.createdCount > 0) {
-        message.success(`Imported ${payload.createdCount} user(s)`);
+        message.success(t("Imported {{count}} user(s)", { count: payload.createdCount }));
         await loadUsers();
       } else {
-        message.warning("No users imported. Check the error list.");
+        message.warning(t("No users imported. Check the error list."));
       }
     } catch (error) {
-      message.error(error.message || "Unable to import users");
+      message.error(tr(error.message || "Unable to import users"));
     } finally {
       setImportingUsers(false);
     }
@@ -499,7 +500,7 @@ export default function AdminPanel({
         if (!response.ok) {
           throw new Error(payload?.message || "Unable to update user");
         }
-        message.success("User updated");
+        message.success(t("User updated"));
       } else {
         const response = await fetch("/api/admin/users", {
           method: "POST",
@@ -516,12 +517,12 @@ export default function AdminPanel({
         if (!response.ok) {
           throw new Error(payload?.message || "Unable to create user");
         }
-        message.success("User created");
+        message.success(t("User created"));
       }
       setUserModalOpen(false);
       await loadUsers();
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setSavingUser(false);
     }
@@ -537,10 +538,10 @@ export default function AdminPanel({
       if (!response.ok) {
         throw new Error(payload?.message || "Unable to delete user");
       }
-      message.success(`Deleted ${record.username}`);
+      message.success(t("Deleted {{name}}", { name: record.username }));
       await loadUsers();
     } catch (error) {
-      message.error(error.message || "Unable to delete user");
+      message.error(tr(error.message || "Unable to delete user"));
     }
   };
 
@@ -556,10 +557,10 @@ export default function AdminPanel({
       if (!response.ok) {
         throw new Error(payload?.message || "Unable to update role permissions");
       }
-      message.success("Role permissions updated");
+      message.success(t("Role permissions updated"));
       await loadRoles();
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setSavingRoles(false);
     }
@@ -577,10 +578,10 @@ export default function AdminPanel({
       if (!response.ok) {
         throw new Error(payload?.message || "Unable to save settings");
       }
-      message.success("System configuration saved");
+      message.success(t("System configuration saved"));
       await loadSettings();
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setSavingSettings(false);
     }
@@ -608,10 +609,10 @@ export default function AdminPanel({
       if (!response.ok) {
         throw new Error(payload?.message || "Unable to save email settings");
       }
-      message.success("Email configuration saved");
+      message.success(t("Email configuration saved"));
       await loadSettings();
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setSavingSettings(false);
     }
@@ -690,7 +691,7 @@ export default function AdminPanel({
         if (!response.ok) {
           throw new Error(payload?.message || "Unable to update field");
         }
-        message.success("Field updated");
+        message.success(t("Field updated"));
       } else {
         const response = await fetch("/api/admin/submission-form-fields", {
           method: "POST",
@@ -711,12 +712,12 @@ export default function AdminPanel({
         if (!response.ok) {
           throw new Error(payload?.message || "Unable to create field");
         }
-        message.success("Field created");
+        message.success(t("Field created"));
       }
       setFormFieldModalOpen(false);
       await loadFormFields();
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setSavingFormField(false);
     }
@@ -735,16 +736,16 @@ export default function AdminPanel({
       }
       await loadFormFields();
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     }
   };
 
   const deleteFormField = (record) => {
     Modal.confirm({
-      title: `Delete field "${record.label}"?`,
+      title: t('Delete field "{{label}}"?', { label: record.label }),
       content: record.systemLocked
-        ? "System fields cannot be deleted."
-        : "Custom field will be removed from the submission form.",
+        ? t("System fields cannot be deleted.")
+        : t("Custom field will be removed from the submission form."),
       okType: "danger",
       onOk: async () => {
         if (record.systemLocked) {
@@ -758,7 +759,7 @@ export default function AdminPanel({
         if (!response.ok) {
           throw new Error(payload?.message || "Unable to delete field");
         }
-        message.success("Field deleted");
+        message.success(t("Field deleted"));
         await loadFormFields();
       }
     });
@@ -790,56 +791,52 @@ export default function AdminPanel({
   };
 
   const userColumns = [
-    { title: "Username", dataIndex: "username", key: "username", width: 120 },
-    { title: "Display name", dataIndex: "displayName", key: "displayName", width: 160 },
+    { title: t("Username"), dataIndex: "username", key: "username", width: 120 },
+    { title: t("Display name"), dataIndex: "displayName", key: "displayName", width: 160 },
     {
-      title: "Role",
+      title: t("Role"),
       dataIndex: "role",
       key: "role",
       width: 130,
-      render: (role) => <Tag>{roleLabel(role)}</Tag>
+      render: (role) => <Tag>{roleText(role, t)}</Tag>
     },
     {
-      title: "Faculty",
+      title: t("Faculty"),
       dataIndex: "facultyName",
       key: "facultyName",
       width: 220,
       render: (value) => value || "—"
     },
     {
-      title: "Status",
+      title: t("Status"),
       dataIndex: "status",
       key: "status",
       width: 100,
-      render: (status) => <Tag color={status === "active" ? "green" : "red"}>{status}</Tag>
+      render: (status) => <Tag color={status === "active" ? "green" : "red"}>{statusText(status, t)}</Tag>
     },
     {
-      title: "Created",
+      title: t("Created"),
       dataIndex: "createdAt",
       key: "createdAt",
       width: 170,
-      render: (v) => (v ? new Date(v).toLocaleString() : "—")
+      render: (v) => (v ? formatDateTime(v, lang) : "—")
     },
     {
-      title: "Actions",
+      title: t("Actions"),
       key: "actions",
       width: 160,
       render: (_v, record) => (
         <Space size={0}>
-          <Button type="link" size="small" onClick={() => openEditUser(record)}>
-            Edit
-          </Button>
+          <Button type="link" size="small" onClick={() => openEditUser(record)}>{t("Edit")}</Button>
           {record.id !== auth.user.id ? (
             <Popconfirm
-              title={`Delete ${record.username}?`}
-              description="This cannot be undone. Users with submissions or reviews cannot be deleted."
-              okText="Delete"
+              title={t("Delete {{name}}?", { name: record.username })}
+              description={t("This cannot be undone. Users with submissions or reviews cannot be deleted.")}
+              okText={t("Delete")}
               okButtonProps={{ danger: true }}
               onConfirm={() => void deleteUser(record)}
             >
-              <Button type="link" size="small" danger>
-                Delete
-              </Button>
+              <Button type="link" size="small" danger>{t("Delete")}</Button>
             </Popconfirm>
           ) : null}
         </Space>
@@ -850,8 +847,9 @@ export default function AdminPanel({
   const emailPanel = (
     <>
       <Paragraph type="secondary">
-        Bật EMAIL_ENABLED để gửi mail. Cần SMTP_HOST, SMTP_USER, SMTP_PASSWORD và SMTP_FROM. Cổng 587
-        (STARTTLS) được dùng tự động. Địa chỉ nhân viên là{" "}
+        {t(
+          "Turn on EMAIL_ENABLED to send mail. SMTP_HOST, SMTP_USER, SMTP_PASSWORD and SMTP_FROM are required. Port 587 (STARTTLS) is used automatically. Staff addresses are"
+        )}{" "}
         <Text code>username@hcmut.edu.vn</Text>.
       </Paragraph>
       <Form form={emailForm} layout="vertical" onFinish={saveEmailSettings}>
@@ -865,36 +863,38 @@ export default function AdminPanel({
             label={SMTP_FIELD_LABELS[item.key] || item.key}
             extra={
               item.key === "smtp_password"
-                ? "Để trống nếu giữ mật khẩu hiện tại"
+                ? t("Leave blank to keep the current password")
                 : item.key === "email_enabled"
-                  ? "true = gửi mail workflow; false = không gửi"
-                  : item.description
+                  ? t("true = send workflow mail; false = do not send")
+                  : item.description ? t(item.description) : undefined
             }
             rules={
               item.key === "smtp_password"
                 ? undefined
-                : [{ required: true, message: "Required" }]
+                : [{ required: true, message: t("Required") }]
             }
           >
-            {renderSettingControl(item)}
+            {renderSettingControl(item, t)}
           </Form.Item>
         ))}
         <Divider />
-        <Title level={5}>Notification templates</Title>
+        <Title level={5}>{t("Notification templates")}</Title>
         <Paragraph type="secondary" style={{ marginBottom: 12 }}>
-          Template placeholders: <Text code>{"{{title}}"}</Text>, <Text code>{"{{studentName}}"}</Text>,{" "}
-          <Text code>{"{{reason}}"}</Text>, <Text code>{"{{portalUrl}}"}</Text>,{" "}
-          <Text code>{"{{author}}"}</Text>, <Text code>{"{{advisor}}"}</Text>,{" "}
-          <Text code>{"{{facultyName}}"}</Text>, <Text code>{"{{semesterName}}"}</Text>.
+          {t("Template placeholders:")} <Text code>{"{{title}}"}</Text>, <Text code>{"{{studentName}}"}</Text>,{" "}
+          <Text code>{"{{reason}}"}</Text>, <Text code>{"{{portalUrl}}"}</Text>, <Text code>{"{{author}}"}</Text>,{" "}
+          <Text code>{"{{advisor}}"}</Text>, <Text code>{"{{facultyName}}"}</Text>, <Text code>{"{{semesterName}}"}</Text>.
         </Paragraph>
         {emailTemplateSettings.map((item) => (
-          <Form.Item key={item.key} name={item.key} label={item.key} extra={item.description}>
-            {renderSettingControl(item)}
+          <Form.Item
+            key={item.key}
+            name={item.key}
+            label={item.key}
+            extra={item.description ? t(item.description) : undefined}
+          >
+            {renderSettingControl(item, t)}
           </Form.Item>
         ))}
-        <Button type="primary" htmlType="submit" loading={savingSettings || loadingSettings}>
-          Save email configuration
-        </Button>
+        <Button type="primary" htmlType="submit" loading={savingSettings || loadingSettings}>{t("Save email configuration")}</Button>
       </Form>
     </>
   );
@@ -902,17 +902,13 @@ export default function AdminPanel({
   const formFieldsPanel = (
     <>
       <Paragraph type="secondary">
-        Configure metadata fields on the student form and when publishing to DSpace. Toggle{" "}
-        <Text strong>Required</Text> / <Text strong>Enabled</Text>, or add custom fields. System
-        fields (Author, Title, …) cannot be deleted — disable them instead.
+        {t("Configure metadata fields on the student form and when publishing to DSpace. Toggle")}{" "}
+        <Text strong>{t("Required")}</Text> / <Text strong>{t("Enabled")}</Text>
+        {t(", or add custom fields. System fields (Author, Title, …) cannot be deleted — disable them instead.")}
       </Paragraph>
       <Space style={{ marginBottom: 12 }} wrap>
-        <Button type="primary" onClick={openCreateFormField}>
-          Add field
-        </Button>
-        <Button onClick={() => void loadFormFields()} loading={loadingFormFields}>
-          Refresh
-        </Button>
+        <Button type="primary" onClick={openCreateFormField}>{t("Add field")}</Button>
+        <Button onClick={() => void loadFormFields()} loading={loadingFormFields}>{t("Refresh")}</Button>
       </Space>
       <Table
         rowKey="id"
@@ -921,17 +917,27 @@ export default function AdminPanel({
         pagination={false}
         scroll={{ x: 1100 }}
         columns={[
-          { title: "Label", dataIndex: "label", width: 160 },
-          { title: "Key", dataIndex: "fieldKey", width: 140, render: (v) => <Text code>{v}</Text> },
           {
-            title: "DSpace path",
+            title: t("Label"),
+            dataIndex: "label",
+            width: 160,
+            render: (_value, row) => fieldDisplayLabel(row, t)
+          },
+          { title: t("Key"), dataIndex: "fieldKey", width: 140, render: (v) => <Text code>{v}</Text> },
+          {
+            title: t("DSpace path"),
             dataIndex: "dspacePath",
             width: 200,
             render: (v) => (v ? <Text code>{v}</Text> : "—")
           },
-          { title: "Type", dataIndex: "inputType", width: 100 },
           {
-            title: "Required",
+            title: t("Type"),
+            dataIndex: "inputType",
+            width: 100,
+            render: (value) => inputTypeText(value, t)
+          },
+          {
+            title: t("Required"),
             dataIndex: "required",
             width: 100,
             render: (v, row) => (
@@ -939,7 +945,7 @@ export default function AdminPanel({
             )
           },
           {
-            title: "Enabled",
+            title: t("Enabled"),
             dataIndex: "enabled",
             width: 100,
             render: (v, row) => (
@@ -947,27 +953,23 @@ export default function AdminPanel({
             )
           },
           {
-            title: "System",
+            title: t("System"),
             dataIndex: "systemLocked",
             width: 90,
-            render: (v) => (v ? <Tag>locked</Tag> : <Tag color="blue">custom</Tag>)
+            render: (v) => (v ? <Tag>{t("locked")}</Tag> : <Tag color="blue">{t("custom")}</Tag>)
           },
           {
-            title: "Actions",
+            title: t("Actions"),
             width: 160,
             render: (_, row) => (
               <Space>
-                <Button size="small" onClick={() => openEditFormField(row)}>
-                  Edit
-                </Button>
+                <Button size="small" onClick={() => openEditFormField(row)}>{t("Edit")}</Button>
                 <Button
                   size="small"
                   danger
                   disabled={row.systemLocked}
                   onClick={() => deleteFormField(row)}
-                >
-                  Delete
-                </Button>
+                >{t("Delete")}</Button>
               </Space>
             )
           }
@@ -978,7 +980,11 @@ export default function AdminPanel({
 
   const formFieldModal = (
       <Modal
-        title={editingFormField ? `Edit field: ${editingFormField.fieldKey}` : "Add submission field"}
+        title={
+          editingFormField
+            ? t("Edit field: {{key}}", { key: editingFormField.fieldKey })
+            : t("Add submission field")
+        }
         open={formFieldModalOpen}
         onCancel={() => setFormFieldModalOpen(false)}
         onOk={() => formFieldForm.submit()}
@@ -989,47 +995,51 @@ export default function AdminPanel({
         <Form form={formFieldForm} layout="vertical" onFinish={saveFormField}>
           <Form.Item
             name="fieldKey"
-            label="Field key"
-            rules={[{ required: true, min: 2, message: "Key is required" }]}
-            extra={editingFormField?.systemLocked ? "System field key cannot change" : "e.g. keywords, degree"}
+            label={t("Field key")}
+            rules={[{ required: true, min: 2, message: t("Key is required") }]}
+            extra={
+              editingFormField?.systemLocked
+                ? t("System field key cannot change")
+                : t("e.g. keywords, degree")
+            }
           >
             <Input disabled={Boolean(editingFormField?.systemLocked)} placeholder="myCustomField" />
           </Form.Item>
-          <Form.Item name="label" label="Label" rules={[{ required: true, message: "Label is required" }]}>
-            <Input placeholder="Keywords" />
+          <Form.Item name="label" label={t("Label")} rules={[{ required: true, message: t("Label is required") }]}>
+            <Input placeholder={t("Keywords")} />
           </Form.Item>
-          <Form.Item name="dspacePath" label="DSpace metadata path" extra="e.g. dc.subject — leave empty to skip DSpace">
+          <Form.Item name="dspacePath" label={t("DSpace metadata path")} extra={t("e.g. dc.subject — leave empty to skip DSpace")}>
             <Input placeholder="dc.subject" />
           </Form.Item>
-          <Form.Item name="inputType" label="Input type" rules={[{ required: true }]}>
+          <Form.Item name="inputType" label={t("Input type")} rules={[{ required: true }]}>
             <Select
               options={[
-                { value: "text", label: "Text" },
-                { value: "textarea", label: "Textarea" },
-                { value: "select", label: "Select" },
-                { value: "year", label: "Year" }
+                { value: "text", label: t("Text") },
+                { value: "textarea", label: t("Textarea") },
+                { value: "select", label: t("Select") },
+                { value: "year", label: t("Year") }
               ]}
             />
           </Form.Item>
-          <Form.Item name="defaultValue" label="Default value">
+          <Form.Item name="defaultValue" label={t("Default value")}>
             <Input />
           </Form.Item>
           <Form.Item
             name="optionsText"
-            label="Select options"
-            extra="One per line: value|Label (only for select type)"
+            label={t("Select options")}
+            extra={t("One per line: value|Label (only for select type)")}
           >
             <Input.TextArea rows={4} placeholder={"vie|Vietnamese\neng|English"} />
           </Form.Item>
           {editingFormField ? (
-            <Form.Item name="sortOrder" label="Sort order">
+            <Form.Item name="sortOrder" label={t("Sort order")}>
               <Input type="number" />
             </Form.Item>
           ) : null}
-          <Form.Item name="required" label="Required" valuePropName="checked">
+          <Form.Item name="required" label={t("Required")} valuePropName="checked">
             <Switch />
           </Form.Item>
-          <Form.Item name="enabled" label="Enabled on form" valuePropName="checked">
+          <Form.Item name="enabled" label={t("Enabled on form")} valuePropName="checked">
             <Switch />
           </Form.Item>
         </Form>
@@ -1039,29 +1049,21 @@ export default function AdminPanel({
   const tabItems = [
     {
       key: "users",
-      label: "Manage users",
+      label: t("Manage users"),
       children: (
         <>
-          <Paragraph type="secondary">
-            Create, edit, or disable user accounts (4.4.5.1).
-          </Paragraph>
+          <Paragraph type="secondary">{t("Create, edit, or disable user accounts (4.4.5.1).")}</Paragraph>
           <Space style={{ marginBottom: 12 }} wrap>
-            <Button type="primary" onClick={openCreateUser}>
-              Create user
-            </Button>
-            <Button icon={<DownloadOutlined />} loading={exportingUsers} onClick={downloadUsersExport}>
-              Export users
-            </Button>
-            <Button onClick={openImportUsers}>Import users</Button>
-            <Button onClick={() => loadUsers()} loading={loadingUsers}>
-              Refresh
-            </Button>
+            <Button type="primary" onClick={openCreateUser}>{t("Create user")}</Button>
+            <Button icon={<DownloadOutlined />} loading={exportingUsers} onClick={downloadUsersExport}>{t("Export users")}</Button>
+            <Button onClick={openImportUsers}>{t("Import users")}</Button>
+            <Button onClick={() => loadUsers()} loading={loadingUsers}>{t("Refresh")}</Button>
           </Space>
           <Space style={{ marginBottom: 12, width: "100%" }} wrap align="start">
             <Input
               allowClear
               prefix={<SearchOutlined />}
-              placeholder="Search username or display name"
+              placeholder={t("Search username or display name")}
               value={userSearch}
               onChange={(e) => setUserSearch(e.target.value)}
               style={{ minWidth: 260, flex: 1 }}
@@ -1071,8 +1073,8 @@ export default function AdminPanel({
               onChange={setUserRoleFilter}
               style={{ minWidth: 180 }}
               options={[
-                { value: "all", label: "All roles" },
-                ...ROLES.map((r) => ({ value: r, label: roleLabel(r) }))
+                { value: "all", label: t("All roles") },
+                ...ROLES.map((r) => ({ value: r, label: roleText(r, t) }))
               ]}
             />
             <Select
@@ -1080,17 +1082,20 @@ export default function AdminPanel({
               onChange={setUserStatusFilter}
               style={{ minWidth: 140 }}
               options={[
-                { value: "all", label: "All statuses" },
-                { value: "active", label: "Active" },
-                { value: "disabled", label: "Disabled" }
+                { value: "all", label: t("All statuses") },
+                { value: "active", label: t("Active") },
+                { value: "disabled", label: t("Disabled") }
               ]}
             />
             {(userSearch || userRoleFilter !== "all" || userStatusFilter !== "all") && (
-              <Button onClick={clearUserFilters}>Clear filters</Button>
+              <Button onClick={clearUserFilters}>{t("Clear filters")}</Button>
             )}
           </Space>
           <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
-            Showing {filteredUsers.length} of {users.length} users
+            {t("Showing {{shown}} of {{total}} users", {
+              shown: filteredUsers.length,
+              total: users.length
+            })}
           </Text>
           <Table
             rowKey="id"
@@ -1105,31 +1110,25 @@ export default function AdminPanel({
     },
     {
       key: "roles",
-      label: "Manage roles",
+      label: t("Manage roles"),
       children: (
         <>
-          <Paragraph type="secondary">
-            Configure permissions for each role (4.4.5.2). Changes are stored for access control policy.
-          </Paragraph>
+          <Paragraph type="secondary">{t("Configure permissions for each role (4.4.5.2). Changes are stored for access control policy.")}</Paragraph>
           <Space style={{ marginBottom: 16 }} wrap>
-            <Text strong>Role:</Text>
+            <Text strong>{t("Role:")}</Text>
             <Select
               style={{ minWidth: 200 }}
               value={selectedRole}
               onChange={setSelectedRole}
-              options={ROLES.map((r) => ({ value: r, label: roleLabel(r) }))}
+              options={ROLES.map((r) => ({ value: r, label: roleText(r, t) }))}
             />
-            <Button type="primary" onClick={saveRolePermissions} loading={savingRoles}>
-              Save permissions
-            </Button>
-            <Button onClick={() => loadRoles()} loading={loadingRoles}>
-              Refresh
-            </Button>
+            <Button type="primary" onClick={saveRolePermissions} loading={savingRoles}>{t("Save permissions")}</Button>
+            <Button onClick={() => loadRoles()} loading={loadingRoles}>{t("Refresh")}</Button>
           </Space>
           <Space direction="vertical" style={{ width: "100%" }} size="middle">
             {Object.keys(PERMISSION_LABELS).map((key) => (
               <Space key={key} style={{ width: "100%", justifyContent: "space-between" }}>
-                <Text>{PERMISSION_LABELS[key]}</Text>
+                <Text>{t(PERMISSION_LABELS[key])}</Text>
                 <Switch
                   checked={Boolean(rolePermissions[key])}
                   onChange={(checked) =>
@@ -1144,44 +1143,40 @@ export default function AdminPanel({
     },
     {
       key: "form-fields",
-      label: "Submission fields",
+      label: t("Submission fields"),
       children: formFieldsPanel
     },
     {
       key: "settings",
-      label: "System settings",
+      label: t("System settings"),
       children: (
         <>
-          <Paragraph type="secondary">
-            Update system configuration parameters (4.4.5.3).
-          </Paragraph>
+          <Paragraph type="secondary">{t("Update system configuration parameters (4.4.5.3).")}</Paragraph>
           <Form form={settingsForm} layout="vertical" onFinish={saveSettings}>
             {systemSettings.map((item) => (
               <Form.Item
                 key={item.key}
                 name={item.key}
                 label={item.key}
-                extra={item.description}
-                rules={[{ required: true, message: "Required" }]}
+                extra={item.description ? t(item.description) : undefined}
+                rules={[{ required: true, message: t("Required") }]}
               >
-                {renderSettingControl(item)}
+                {renderSettingControl(item, t)}
               </Form.Item>
             ))}
-            <Button type="primary" htmlType="submit" loading={savingSettings || loadingSettings}>
-              Save configuration
-            </Button>
+            <Button type="primary" htmlType="submit" loading={savingSettings || loadingSettings}>{t("Save configuration")}</Button>
           </Form>
         </>
       )
     },
     {
       key: "email",
-      label: "Email configuration",
+      label: t("Email configuration"),
       children: emailPanel
     },
     {
       key: "archive",
-      label: "Archive configuration",
+      label: t("Archive configuration"),
       children: <LibraryArchivePanel auth={auth} readOnly={false} canManage />
     }
   ];
@@ -1215,13 +1210,13 @@ export default function AdminPanel({
   return (
     <>
       <Paragraph type="secondary">
-        Administrator workspace: user accounts, role permissions, system and email configuration.
-        Administrators do not approve or reject theses; they can create and submit on behalf of a student from the
-        Submissions tab. Submission form fields are configured under Submissions.
+        {t(
+          "Administrator workspace: user accounts, role permissions, system and email configuration. Administrators do not approve or reject theses; they can create and submit on behalf of a student from the Submissions tab. Submission form fields are configured under Submissions."
+        )}
       </Paragraph>
       <Tabs activeKey={activeTab} onChange={setActiveTab} items={visibleTabs} />
       <Modal
-        title={editingUser ? `Edit user: ${editingUser.username}` : "Create user"}
+        title={editingUser ? t("Edit user: {{name}}", { name: editingUser.username }) : t("Create user")}
         open={userModalOpen}
         onCancel={() => setUserModalOpen(false)}
         footer={null}
@@ -1230,82 +1225,80 @@ export default function AdminPanel({
         <Form form={userForm} layout="vertical" onFinish={saveUser}>
           {!editingUser ? (
             <Form.Item
-              label="Username"
+              label={t("Username")}
               name="username"
-              rules={[{ required: true, message: "Username is required" }]}
+              rules={[{ required: true, message: t("Username is required") }]}
             >
               <Input />
             </Form.Item>
           ) : (
-            <Form.Item label="Username">
+            <Form.Item label={t("Username")}>
               <Input value={editingUser.username} disabled />
             </Form.Item>
           )}
           <Form.Item
-            label="Display name"
+            label={t("Display name")}
             name="displayName"
-            rules={[{ required: true, message: "Display name is required" }]}
+            rules={[{ required: true, message: t("Display name is required") }]}
           >
             <Input />
           </Form.Item>
-          <Form.Item label="Role" name="role" rules={[{ required: true }]}>
-            <Select options={ROLES.map((r) => ({ value: r, label: roleLabel(r) }))} />
+          <Form.Item label={t("Role")} name="role" rules={[{ required: true }]}>
+            <Select options={ROLES.map((r) => ({ value: r, label: roleText(r, t) }))} />
           </Form.Item>
           <Form.Item
-            label="Faculty"
+            label={t("Faculty")}
             name="facultyId"
-            rules={facultyRequired ? [{ required: true, message: "Faculty is required for students and reviewers" }] : []}
+            rules={facultyRequired ? [{ required: true, message: t("Faculty is required for students and reviewers") }] : []}
           >
             <Select
               allowClear={!facultyRequired}
               showSearch
               optionFilterProp="label"
-              placeholder={facultyRequired ? "Select faculty" : "Optional"}
+              placeholder={facultyRequired ? t("Select faculty") : t("Optional")}
               options={faculties.map((faculty) => ({ value: faculty.id, label: faculty.name }))}
             />
           </Form.Item>
           {editingUser ? (
-            <Form.Item label="Status" name="status" rules={[{ required: true }]}>
+            <Form.Item label={t("Status")} name="status" rules={[{ required: true }]}>
               <Select
                 options={[
-                  { value: "active", label: "active" },
-                  { value: "disabled", label: "disabled" }
+                  { value: "active", label: t("active") },
+                  { value: "disabled", label: t("disabled") }
                 ]}
               />
             </Form.Item>
           ) : null}
           <Form.Item
-            label={editingUser ? "New password (optional)" : "Password"}
+            label={editingUser ? t("New password (optional)") : t("Password")}
             name="password"
             rules={
               editingUser
-                ? [{ min: 6, message: "At least 6 characters" }]
+                ? [{ min: 6, message: t("At least 6 characters") }]
                 : [
-                    { required: true, message: "Password is required" },
-                    { min: 6, message: "At least 6 characters" }
+                    { required: true, message: t("Password is required") },
+                    { min: 6, message: t("At least 6 characters") }
                   ]
             }
           >
             <Input.Password />
           </Form.Item>
           <Space>
-            <Button onClick={() => setUserModalOpen(false)}>Cancel</Button>
+            <Button onClick={() => setUserModalOpen(false)}>{t("Cancel")}</Button>
             <Button type="primary" htmlType="submit" loading={savingUser}>
-              {editingUser ? "Save changes" : "Create"}
+              {editingUser ? t("Save changes") : t("Create")}
             </Button>
           </Space>
         </Form>
       </Modal>
       <Modal
-        title="Import users"
+        title={t("Import users")}
         open={importModalOpen}
         onCancel={() => setImportModalOpen(false)}
         width={920}
         destroyOnClose
         footer={[
-          <Button key="cancel" onClick={() => setImportModalOpen(false)}>
-            Cancel
-          </Button>,
+          <Button key="cancel" onClick={() => setImportModalOpen(false)}>{t("Cancel")}</Button>,
           <Button
             key="import"
             type="primary"
@@ -1315,42 +1308,37 @@ export default function AdminPanel({
               !importPreview?.toImport?.length || (importPreview?.requiresFaculty && !importFacultyId)
             }
             onClick={confirmImportUsers}
-          >
-            Import
-          </Button>
+          >{t("Import")}</Button>
         ]}
       >
         <Paragraph type="secondary">
-          1. Download the template, or use a CSV export. 2. Upload <Text code>.xlsx</Text> or <Text code>.csv</Text>{" "}
-          to preview. 3. Check the list, then click Import.
+          {t("1. Download the template, or use a CSV export. 2. Upload")} <Text code>.xlsx</Text> {t("or")}{" "}
+          <Text code>.csv</Text> {t("to preview. 3. Check the list, then click Import.")}
         </Paragraph>
         <Paragraph type="secondary">
-          Portal columns: <Text code>username</Text>, <Text code>display name</Text>, <Text code>role</Text>,{" "}
-          <Text code>faculty</Text> ({ROLES.join(", ")}). CSV columns: <Text code>email</Text>, <Text code>netid</Text>,{" "}
-          <Text code>last_name</Text>, <Text code>first_name</Text>, <Text code>phone</Text>, <Text code>language</Text>,{" "}
-          <Text code>can_log_in</Text>, <Text code>password</Text>. <Text code>netid</Text> becomes the username, and
-          the display name is last name then first name. A missing role defaults to student. Faculty is required for
-          student and reviewer — choose one below when the file has none. A password is used for username login; rows
-          without a password sign in with Google as <Text code>username@hcmut.edu.vn</Text>.{" "}
-          <Text code>can_log_in</Text> false creates a disabled account. Phone and language are accepted and not stored.
+          {t("Portal columns:")} <Text code>username</Text>, <Text code>display name</Text>, <Text code>role</Text>,{" "}
+          <Text code>faculty</Text> ({ROLES.join(", ")}). {t("CSV columns:")} <Text code>email</Text>,{" "}
+          <Text code>netid</Text>, <Text code>last_name</Text>, <Text code>first_name</Text>, <Text code>phone</Text>,{" "}
+          <Text code>language</Text>, <Text code>can_log_in</Text>, <Text code>password</Text>. <Text code>netid</Text>{" "}
+          {t(
+            "becomes the username, and the display name is last name then first name. A missing role defaults to student. Faculty is required for student and reviewer — choose one below when the file has none. A password is used for username login; rows without a password sign in with Google as"
+          )}{" "}
+          <Text code>username@hcmut.edu.vn</Text>. <Text code>can_log_in</Text>{" "}
+          {t("false creates a disabled account. Phone and language are accepted and not stored.")}
         </Paragraph>
         <Space wrap style={{ marginBottom: 16 }}>
-          <Button icon={<DownloadOutlined />} loading={downloadingTemplate} onClick={downloadUserTemplate}>
-            Download template
-          </Button>
+          <Button icon={<DownloadOutlined />} loading={downloadingTemplate} onClick={downloadUserTemplate}>{t("Download template")}</Button>
           <Upload accept=".xlsx,.csv,text/csv" showUploadList={false} beforeUpload={previewUsersFile}>
-            <Button icon={<UploadOutlined />} loading={previewingImport}>
-              Upload file
-            </Button>
+            <Button icon={<UploadOutlined />} loading={previewingImport}>{t("Upload file")}</Button>
           </Upload>
         </Space>
         {importPreview?.requiresFaculty ? (
           <Form layout="vertical" style={{ marginBottom: 16, maxWidth: 480 }}>
-            <Form.Item label="Faculty for rows without one" required style={{ marginBottom: 0 }}>
+            <Form.Item label={t("Faculty for rows without one")} required style={{ marginBottom: 0 }}>
               <Select
                 showSearch
                 optionFilterProp="label"
-                placeholder="Select faculty"
+                placeholder={t("Select faculty")}
                 value={importFacultyId || undefined}
                 onChange={setImportFacultyId}
                 options={faculties.map((faculty) => ({ value: faculty.id, label: faculty.name }))}
@@ -1361,8 +1349,9 @@ export default function AdminPanel({
         {importPreview ? (
           <>
             <Paragraph>
-              File: <Text strong>{importPreview.fileName}</Text> · Will import: {importPreview.toImportCount} ·
-              Skipped: {importPreview.errorCount}
+              {t("File:")} <Text strong>{importPreview.fileName}</Text> ·{" "}
+              {t("Will import: {{count}}", { count: importPreview.toImportCount })} ·{" "}
+              {t("Skipped: {{count}}", { count: importPreview.errorCount })}
             </Paragraph>
             {importPreview.toImport?.length ? (
               <Table
@@ -1372,14 +1361,14 @@ export default function AdminPanel({
                 dataSource={importPreview.toImport}
                 style={{ marginBottom: 16 }}
                 columns={[
-                  { title: "Row", dataIndex: "row", width: 70 },
-                  { title: "Username", dataIndex: "username" },
-                  { title: "Display name", dataIndex: "displayName" },
-                  { title: "Email", dataIndex: "email" },
-                  { title: "Role", dataIndex: "role", width: 120 },
-                  { title: "Status", dataIndex: "status", width: 90 },
+                  { title: t("Row"), dataIndex: "row", width: 70 },
+                  { title: t("Username"), dataIndex: "username" },
+                  { title: t("Display name"), dataIndex: "displayName" },
+                  { title: t("Email"), dataIndex: "email" },
+                  { title: t("Role"), dataIndex: "role", width: 120 },
+                  { title: t("Status"), dataIndex: "status", width: 90 },
                   {
-                    title: "Faculty",
+                    title: t("Faculty"),
                     dataIndex: "facultyName",
                     render: (value, row) => {
                       if (value) return value;
@@ -1391,19 +1380,19 @@ export default function AdminPanel({
                 ]}
               />
             ) : (
-              <Paragraph type="secondary">No users will be imported from this file.</Paragraph>
+              <Paragraph type="secondary">{t("No users will be imported from this file.")}</Paragraph>
             )}
             {importPreview.errors?.length ? (
               <Table
                 size="small"
-                title={() => "Skipped rows"}
+                title={() => t("Skipped rows")}
                 rowKey={(row) => `${row.row}-${row.username || ""}-${row.message}`}
                 pagination={false}
                 dataSource={importPreview.errors}
                 columns={[
-                  { title: "Row", dataIndex: "row", width: 70 },
-                  { title: "Username", dataIndex: "username" },
-                  { title: "Reason", dataIndex: "message" }
+                  { title: t("Row"), dataIndex: "row", width: 70 },
+                  { title: t("Username"), dataIndex: "username" },
+                  { title: t("Reason"), dataIndex: "message", render: (value) => tr(value) }
                 ]}
               />
             ) : null}
@@ -1411,7 +1400,10 @@ export default function AdminPanel({
         ) : null}
         {importResult ? (
           <Paragraph style={{ marginTop: 12 }}>
-            Imported: {importResult.createdCount} · Errors: {importResult.errorCount}
+            {t("Imported: {{created}} · Errors: {{errors}}", {
+              created: importResult.createdCount,
+              errors: importResult.errorCount
+            })}
             {importResult.errors?.length ? (
               <Table
                 size="small"
@@ -1420,8 +1412,8 @@ export default function AdminPanel({
                 pagination={false}
                 dataSource={importResult.errors}
                 columns={[
-                  { title: "Username", dataIndex: "username" },
-                  { title: "Error", dataIndex: "message" }
+                  { title: t("Username"), dataIndex: "username" },
+                  { title: t("Error"), dataIndex: "message", render: (value) => tr(value) }
                 ]}
               />
             ) : null}

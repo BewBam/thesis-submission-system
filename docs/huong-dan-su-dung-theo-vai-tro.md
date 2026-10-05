@@ -11,7 +11,7 @@ Cổng nộp luận văn hỗ trợ sinh viên nộp luận văn/luận án đi�
 
 ### 2. Truy cập và đăng nhập
 
-1. Mở trình duyệt và truy cập địa chỉ cổng https://thesis-submission-system-demo-bewbams-projects.vercel.app/.
+1. Kết nối mạng LIB_PRIVATE, mở trình duyệt và truy cập địa chỉ cổng http://172.28.60.43/.
 2. Nhập **Tên đăng nhập** và **Mật khẩu**.
 3. Nhấn **Login** (Đăng nhập).
 4. Sau khi đăng nhập thành công, hệ thống hiển thị **Dashboard** tương ứng với vai trò của tài khoản.
@@ -59,7 +59,7 @@ Bài archived nằm trên cổng cho đến khi thư viện hoặc admin đẩy 
 
 Luồng mặc định, từ lúc mở đợt đến khi bài có trên DSpace. Mỗi bước chỉ một vai trò thao tác.
 
-1. **Admin** tạo tài khoản student, reviewer, library_staff, director. Student và reviewer phải gắn khoa. **Thư viện hoặc admin** tạo học kỳ, mở đợt nộp (**open**), và gắn collection DSpace nếu sẽ đẩy lưu trữ.
+1. **Admin** tạo tài khoản student, reviewer, library_staff, director. Student và reviewer phải gắn khoa. **Thư viện hoặc admin** tạo học kỳ, mở đợt nộp (**open**).
 2. **Sinh viên** chọn học kỳ và đợt đang mở, điền form, chọn tác giả và phản biện, tải PDF. Có thể **Save draft** (`draft`). **Submit thesis** chuyển bài sang `reviewing` và giao cho các phản biện đã chọn.
 3. **Từng phản biện** **Approve** hoặc **Reject** (reject bắt buộc có lý do), mỗi người một lần.
    - Một người **Reject** → bài thành `rejected`. Dừng tại đây cho đến khi sinh viên nộp lại hoặc xóa.
@@ -341,10 +341,10 @@ Nhấn **Save permissions** để lưu.
 
 | Tham số | Mô tả |
 |---------|--------|
-| dspace_api_base_url | Base URL REST DSpace, ví dụ `http://host.docker.internal:8080/server` |
+| dspace_api_base_url | Base URL REST DSpace, ví dụ `http://host.docker.internal:8080/server` hoặc `http://10.10.10.21:8080/server` |
 | dspace_api_user | Email/username DSpace — dùng **auto-login** |
 | dspace_api_password | Mật khẩu DSpace (auto-login) |
-| dspace_api_token | Token tĩnh (chỉ fallback khi không có user/password) |
+| dspace_api_token | Token tĩnh (chỉ fallback khi không có user/password) (tuỳ chọn) |
 | dspace_root_community_id | UUID community gốc (tuỳ chọn) |
 | thesis_max_file_size_mb | Dung lượng tối đa file PDF (mặc định 30 MB) |
 | submission_timezone | Múi giờ đợt nộp |
@@ -362,12 +362,6 @@ Nhấn **Save** sau khi chỉnh sửa. Tab **Email configuration** đặt SMTP v
 - **All submissions:** xem mọi bài. **Create submission** / **Edit** mở form thay sinh viên. Semester và Submission period hiện **tên**, không hiện id. **Full detail** xem hoặc xóa bài, kể cả bài archived đã gắn DSpace.
 - **Authors** và **Reviewers** trên form tìm theo tên hoặc username.
 - **Submission fields:** bật/tắt, đổi nhãn và thứ tự trường form nộp bài.
-
-### 6. Mẹo sử dụng
-
-- Tắt **maintenance_mode** trừ khi bảo trì có kế hoạch.
-- Không chia sẻ mật khẩu tài khoản admin.
-- Vô hiệu hóa (**disabled**) tài khoản nghỉ việc thay vì xóa.
 
 ---
 

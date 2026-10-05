@@ -28,6 +28,9 @@ import {
   RightOutlined
 } from "@ant-design/icons";
 import dayjs from "dayjs";
+import { translateApiMessage } from "./i18n/api";
+import { useI18n } from "./i18n/I18nProvider";
+import { countPhrase, formatDateTime, statusText } from "./i18n/labels";
 const { Title, Paragraph, Text } = Typography;
 
 function toIsoString(value) {
@@ -73,9 +76,9 @@ function sortDspaceSettings(items) {
   return [...items].sort((a, b) => (rank.get(a.key) ?? 99) - (rank.get(b.key) ?? 99) || a.key.localeCompare(b.key));
 }
 
-function renderDspaceSettingControl(item) {
+function renderDspaceSettingControl(item, t) {
   if (item.key === "dspace_api_password" || item.key === "dspace_api_token") {
-    return <Input.Password placeholder={item.sensitive ? "Unchanged if left blank / masked" : ""} />;
+    return <Input.Password placeholder={item.sensitive ? t("Unchanged if left blank / masked") : ""} />;
   }
   return <Input />;
 }
@@ -184,6 +187,7 @@ function buildDspaceTreeData(nodes, options = {}) {
   if (!Array.isArray(nodes) || nodes.length === 0) {
     return [];
   }
+  const translate = options.t || ((key) => key);
   const collectionsOnly = Boolean(options.selectableCollectionsOnly);
   const idSet = new Set(nodes.map((node) => node.dspaceId));
   const byParent = new Map();
@@ -215,7 +219,7 @@ function buildDspaceTreeData(nodes, options = {}) {
             {isCollection ? <DatabaseOutlined /> : <FolderOutlined />}
             <Text strong={!isCollection}>{node.name}</Text>
             <Tag color={isCollection ? "blue" : "geekblue"}>
-              {isCollection ? "collection" : "community"}
+              {isCollection ? translate("collection") : translate("community")}
             </Tag>
             {options.hideId ? null : (
               <Text type="secondary" code style={{ fontSize: 11 }}>
@@ -247,6 +251,8 @@ function collectExpandableKeys(treeNodes) {
 }
 
 export default function LibraryArchivePanel({ auth, readOnly = false, canManage }) {
+  const { t, lang } = useI18n();
+  const tr = (value) => translateApiMessage(value, t);
   const allowEdit = canManage ?? !readOnly;
   const isAdmin = auth?.user?.role === "admin";
   const canManageFaculties = isAdmin;
@@ -295,10 +301,10 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
   const [targetCollectionId, setTargetCollectionId] = useState(null);
   const [pushCollectionModalOpen, setPushCollectionModalOpen] = useState(false);
 
-  const dspaceTreeData = useMemo(() => buildDspaceTreeData(dspaceSyncNodes), [dspaceSyncNodes]);
+  const dspaceTreeData = useMemo(() => buildDspaceTreeData(dspaceSyncNodes, { t }), [dspaceSyncNodes, t]);
   const pushCollectionTreeData = useMemo(
-    () => buildDspaceTreeData(dspaceSyncNodes, { selectableCollectionsOnly: true, hideId: true }),
-    [dspaceSyncNodes]
+    () => buildDspaceTreeData(dspaceSyncNodes, { selectableCollectionsOnly: true, hideId: true, t }),
+    [dspaceSyncNodes, t]
   );
   const selectedPushCollection = dspaceSyncNodes.find(
     (node) => node.type === "collection" && node.dspaceId === targetCollectionId
@@ -352,7 +358,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
       }
       dspaceSettingsForm.setFieldsValue(values);
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setLoadingDspaceSettings(false);
     }
@@ -370,7 +376,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
       }
       setFaculties(Array.isArray(payload) ? payload : []);
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setLoadingFaculties(false);
     }
@@ -415,7 +421,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
           }
         }));
       } catch (error) {
-        message.error(error.message);
+        message.error(tr(error.message));
         setFacultyTree((prev) => ({
           ...prev,
           [facultyId]: {
@@ -471,7 +477,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
       setPublishQueue(Array.isArray(payload) ? payload : []);
       setSelectedPublishIds([]);
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setLoadingPublishQueue(false);
     }
@@ -515,7 +521,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
     } catch (error) {
       setPublishSemesters([]);
       setPublishPeriods([]);
-      message.error(error.message);
+      message.error(tr(error.message));
     }
   };
 
@@ -526,7 +532,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
 
   const openPushCollectionModal = () => {
     if (selectedPublishIds.length === 0) {
-      message.warning("Chọn ít nhất một submission");
+      message.warning(t("Select at least one submission"));
       return;
     }
     setTargetCollectionId(null);
@@ -543,11 +549,11 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
 
   const pushSelectedToDspace = async () => {
     if (!targetCollectionId) {
-      message.warning("Chọn DSpace collection đích");
+      message.warning(t("Choose a destination DSpace collection"));
       return;
     }
     if (selectedPublishIds.length === 0) {
-      message.warning("Chọn ít nhất một submission");
+      message.warning(t("Select at least one submission"));
       return;
     }
     setPushingDspace(true);
@@ -568,7 +574,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
       const okCount = results.filter((r) => r.ok).length;
       const failed = results.filter((r) => !r.ok);
       if (failed.length === 0) {
-        message.success(`Pushed ${okCount} submission(s) to DSpace`);
+        message.success(t("Pushed {{count}} submission(s) to DSpace", { count: okCount }));
       } else {
         const detail = failed
           .map((row) => row.message)
@@ -577,8 +583,12 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
           .join(" ");
         message.warning(
           detail
-            ? `Pushed ${okCount} ok, ${failed.length} failed. ${detail}`
-            : `Pushed ${okCount} ok, ${failed.length} failed`
+            ? t("Pushed {{ok}} ok, {{failed}} failed. {{detail}}", {
+                ok: okCount,
+                failed: failed.length,
+                detail: tr(detail)
+              })
+            : t("Pushed {{ok}} ok, {{failed}} failed", { ok: okCount, failed: failed.length })
         );
       }
       setPushCollectionModalOpen(false);
@@ -586,7 +596,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
       setSelectedPublishIds([]);
       await loadPublishQueue();
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setPushingDspace(false);
     }
@@ -610,7 +620,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
         setConfigSemesters(Array.isArray(payload) ? payload : []);
       } catch (error) {
         setConfigSemesters([]);
-        message.error(error.message);
+        message.error(tr(error.message));
       } finally {
         setLoadingConfigSemesters(false);
       }
@@ -644,10 +654,10 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
       if (!response.ok) {
         throw new Error(payload?.message || "Unable to save DSpace settings");
       }
-      message.success("DSpace settings saved");
+      message.success(t("DSpace settings saved"));
       await loadDspaceSettings();
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setSavingDspaceSettings(false);
     }
@@ -670,12 +680,16 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
       const communities = payload.stats?.communities ?? 0;
       const collections = payload.stats?.collections ?? 0;
       message.success(
-        `Synced ${total} DSpace nodes (${communities} communities, ${collections} collections)`
+        t("Synced {{total}} DSpace nodes ({{communities}} communities, {{collections}} collections)", {
+          total,
+          communities,
+          collections
+        })
       );
       await loadFaculties();
       await Promise.all(expandedFacultyKeys.map((facultyId) => loadFacultyTree(facultyId)));
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setSyncingDspace(false);
     }
@@ -695,7 +709,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
       if (!response.ok) {
         throw new Error(payload?.message || "Unable to create faculty");
       }
-      message.success("Faculty created");
+      message.success(t("Faculty created"));
       setFacultyModalOpen(false);
       facultyForm.resetFields();
       await loadFaculties();
@@ -704,7 +718,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
         await expandFaculty(payload.id);
       }
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setSaving(false);
     }
@@ -714,7 +728,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
     const forAllFaculties = values.forAllFaculties === true;
     const facultyId = values.facultyId;
     if (!forAllFaculties && !facultyId) {
-      message.warning("Select a faculty");
+      message.warning(t("Select a faculty"));
       return;
     }
     setSaving(true);
@@ -741,11 +755,14 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
         const skippedCount = payload?.skippedCount ?? 0;
         message.success(
           skippedCount > 0
-            ? `Created semester for ${createdCount} faculties, skipped ${skippedCount}`
-            : `Created semester for ${createdCount} faculties`
+            ? t("Created semester for {{created}} faculties, skipped {{skipped}}", {
+                created: createdCount,
+                skipped: skippedCount
+              })
+            : t("Created semester for {{created}} faculties", { created: createdCount })
         );
       } else {
-        message.success("Semester created");
+        message.success(t("Semester created"));
       }
       setSemesterModalOpen(false);
       semesterForm.resetFields();
@@ -759,7 +776,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
         }
       }
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setSaving(false);
     }
@@ -768,15 +785,15 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
   const submitPeriod = async (values) => {
     const facultyId = values.facultyId;
     if (!facultyId) {
-      message.warning("Select a faculty");
+      message.warning(t("Select a faculty"));
       return;
     }
     if (!values.semesterId) {
-      message.warning("Select a semester");
+      message.warning(t("Select a semester"));
       return;
     }
     if (!values.range?.[0] || !values.range?.[1]) {
-      message.error("Please choose submission open and close dates");
+      message.error(t("Please choose submission open and close dates"));
       return;
     }
     setSaving(true);
@@ -805,12 +822,12 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
         if (!openRes.ok) {
           throw new Error(openPayload?.message || "Period created but could not be opened");
         }
-        message.success("Submission period created and opened");
+        message.success(t("Submission period created and opened"));
       } else {
         message.success(
           payload?.dspaceCollectionId
-            ? "Submission period created (DSpace collection linked)"
-            : "Submission period created (draft)"
+            ? t("Submission period created (DSpace collection linked)")
+            : t("Submission period created (draft)")
         );
       }
       periodForm.resetFields();
@@ -825,7 +842,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
       await loadFaculties();
       await expandFaculty(facultyId);
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setSaving(false);
     }
@@ -869,7 +886,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
       if (!response.ok) {
         throw new Error(payload?.message || `Unable to ${action} period`);
       }
-      message.success(action === "open" ? "Period opened" : "Period closed");
+      message.success(action === "open" ? t("Period opened") : t("Period closed"));
       await loadFaculties();
       if (facultyId) {
         await loadFacultyTree(facultyId);
@@ -878,7 +895,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
         await openDetail("period", periodId);
       }
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setActionId(null);
     }
@@ -902,7 +919,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
       }
       setDetailRecord(payload);
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
       setDetailKind(null);
     } finally {
       setDetailLoading(false);
@@ -958,7 +975,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
         };
       } else {
         if (!values.range?.[0] || !values.range?.[1]) {
-          message.error("Please choose open and close dates");
+          message.error(t("Please choose open and close dates"));
           setSaving(false);
           return;
         }
@@ -979,7 +996,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
       if (!response.ok) {
         throw new Error(payload?.message || "Unable to update");
       }
-      message.success("Updated successfully");
+      message.success(t("Updated successfully"));
       const treeFacultyId = editKind === "faculty" ? editRecord.id : editRecord.facultyId;
       setEditKind(null);
       setEditRecord(null);
@@ -992,7 +1009,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
         setDetailRecord(payload);
       }
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setSaving(false);
     }
@@ -1002,21 +1019,27 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
     if (!detailKind || !detailRecord) {
       return;
     }
-    const labels = {
-      faculty: "faculty",
-      semester: "semester",
-      period: "submission period"
-    };
     const name = detailRecord.name;
+    const titles = {
+      faculty: t("Delete faculty?"),
+      semester: t("Delete semester?"),
+      period: t("Delete submission period?")
+    };
+    const contents = {
+      faculty: t(
+        'Delete "{{name}}" from Portal? Semesters and periods under this faculty will also be removed. Linked submissions keep files but lose the period link.',
+        { name }
+      ),
+      semester: t(
+        'Delete "{{name}}" from Portal? Periods under this semester will also be removed. Linked submissions will lose the period link.',
+        { name }
+      ),
+      period: t('Delete period "{{name}}" from Portal? Linked submissions will lose the period link.', { name })
+    };
     Modal.confirm({
-      title: `Delete ${labels[detailKind]}?`,
-      content:
-        detailKind === "faculty"
-          ? `Delete "${name}" from Portal? Semesters and periods under this faculty will also be removed. Linked submissions keep files but lose the period link.`
-          : detailKind === "semester"
-            ? `Delete "${name}" from Portal? Periods under this semester will also be removed. Linked submissions will lose the period link.`
-            : `Delete period "${name}" from Portal? Linked submissions will lose the period link.`,
-      okText: "Delete",
+      title: titles[detailKind],
+      content: contents[detailKind],
+      okText: t("Delete"),
       okType: "danger",
       onOk: () => deleteFromDetail()
     });
@@ -1044,11 +1067,11 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
         throw new Error(payload?.message || "Unable to delete");
       }
       if (payload?.dspaceDeleteWarning) {
-        message.warning("Removed from Portal, but DSpace node may still exist — check backend logs");
+        message.warning(t("Removed from Portal, but DSpace node may still exist — check backend logs"));
       } else if (payload?.dspaceDeleted) {
-        message.success("Deleted from Portal and DSpace");
+        message.success(t("Deleted from Portal and DSpace"));
       } else {
-        message.success("Deleted successfully");
+        message.success(t("Deleted successfully"));
       }
       const deletedFaculty = detailKind === "faculty";
       const treeFacultyId = deletedFaculty ? id : detailRecord.facultyId;
@@ -1070,7 +1093,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
         await loadFacultyTree(treeFacultyId);
       }
     } catch (error) {
-      message.error(error.message);
+      message.error(tr(error.message));
     } finally {
       setActionId(null);
     }
@@ -1098,18 +1121,18 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
   return (
     <Space direction="vertical" size="middle" style={{ width: "100%" }}>
       <div>
-        <Title level={5} style={{ margin: 0 }}>
-          Faculty archive configuration
-        </Title>
+        <Title level={5} style={{ margin: 0 }}>{t("Faculty archive configuration")}</Title>
         <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          Portal đã seed sẵn 11 khoa HCMUT. Sau workflow, submission được archive vào period
-          (chưa lên DSpace). Admin/library staff dùng tab <Text strong>Push to DSpace</Text> để đẩy
-          lên collection đã sync.
+          {t(
+            "The portal already has the 11 HCMUT faculties. After the workflow, a submission is archived into a period (not yet on DSpace). Admin and library staff use the Push to DSpace tab to send it to a synced collection."
+          )}
         </Paragraph>
       </div>
       <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
         <Text type="secondary">
-          {allowEdit ? "Config submission period under existing faculty / semester" : "Read-only view"}
+          {allowEdit
+            ? t("Config submission period under existing faculty / semester")
+            : t("Read-only view")}
         </Text>
         <Space wrap>
           <Button
@@ -1120,13 +1143,9 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
               })();
             }}
             loading={loadingFaculties}
-          >
-            Refresh
-          </Button>
+          >{t("Refresh")}</Button>
           {allowEdit && (
-            <Button loading={syncingDspace} onClick={() => void syncFromDspaceRoot()}>
-              Sync from DSpace
-            </Button>
+            <Button loading={syncingDspace} onClick={() => void syncFromDspaceRoot()}>{t("Sync from DSpace")}</Button>
           )}
           {canManageFaculties && (
             <Button
@@ -1134,9 +1153,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
               onClick={() => {
                 setFacultyModalOpen(true);
               }}
-            >
-              Add faculty
-            </Button>
+            >{t("Add faculty")}</Button>
           )}
         </Space>
       </Space>
@@ -1149,7 +1166,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
             ? [
                 {
                   key: "dspace-settings",
-                  label: "DSpace settings",
+                  label: t("DSpace settings"),
                   children: (
                     <Space direction="vertical" size="middle" style={{ width: "100%", maxWidth: 640 }}>
                       <Paragraph type="secondary" style={{ marginBottom: 0 }}>
@@ -1170,16 +1187,14 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                             label={item.key}
                             extra={item.description}
                           >
-                            {renderDspaceSettingControl(item)}
+                            {renderDspaceSettingControl(item, t)}
                           </Form.Item>
                         ))}
                         <Button
                           type="primary"
                           htmlType="submit"
                           loading={savingDspaceSettings || loadingDspaceSettings}
-                        >
-                          Save DSpace settings
-                        </Button>
+                        >{t("Save DSpace settings")}</Button>
                       </Form>
                     </Space>
                   )
@@ -1190,21 +1205,21 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
             ? [
                 {
                   key: "push-dspace",
-                  label: "Push to DSpace",
+                  label: t("Push to DSpace"),
                   children: (
                     <Space direction="vertical" size="middle" style={{ width: "100%" }}>
                       <Alert
                         type="info"
                         showIcon
-                        message="Archived submissions stay in Portal periods until you push them"
-                        description="Filter by faculty / semester / period / DSpace status, select submissions, then click Push selected to choose a DSpace collection."
+                        message={t("Archived submissions stay in Portal periods until you push them")}
+                        description={t("Filter by faculty / semester / period / DSpace status, select submissions, then click Push selected to choose a DSpace collection.")}
                       />
                       <Space wrap>
                         <Select
                           allowClear
                           showSearch
                           optionFilterProp="label"
-                          placeholder="Lọc khoa"
+                          placeholder={t("Filter faculty")}
                           style={{ minWidth: 220 }}
                           value={publishFilterFacultyId}
                           options={faculties.map((f) => ({
@@ -1217,7 +1232,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                           allowClear
                           showSearch
                           optionFilterProp="label"
-                          placeholder="Lọc học kỳ"
+                          placeholder={t("Filter semester")}
                           style={{ minWidth: 200 }}
                           value={publishFilterSemesterId}
                           disabled={!publishFilterFacultyId}
@@ -1231,7 +1246,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                           allowClear
                           showSearch
                           optionFilterProp="label"
-                          placeholder="Lọc period"
+                          placeholder={t("Filter period")}
                           style={{ minWidth: 220 }}
                           value={publishFilterPeriodId}
                           disabled={!publishFilterSemesterId}
@@ -1244,51 +1259,53 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                           onChange={(v) => setPublishFilterPeriodId(v || null)}
                         />
                         <Select
-                          placeholder="Trạng thái DSpace"
+                          placeholder={t("DSpace status")}
                           style={{ minWidth: 160 }}
                           value={publishFilterStatus}
                           options={[
-                            { value: "pending", label: "pending (chưa lên)" },
-                            { value: "published", label: "published" },
-                            { value: "failed", label: "failed" },
-                            { value: "", label: "Tất cả" }
+                            { value: "pending", label: t("pending (not published)") },
+                            { value: "published", label: t("Published") },
+                            { value: "failed", label: t("Failed") },
+                            { value: "", label: t("All") }
                           ]}
                           onChange={(v) => setPublishFilterStatus(v ?? "")}
                         />
-                        <Button loading={loadingPublishQueue} onClick={() => void loadPublishQueue()}>
-                          Apply filters
-                        </Button>
+                        <Button loading={loadingPublishQueue} onClick={() => void loadPublishQueue()}>{t("Apply filters")}</Button>
                       </Space>
                       <Button
                         type="primary"
                         disabled={selectedPublishIds.length === 0}
                         onClick={openPushCollectionModal}
                       >
-                        Push selected ({selectedPublishIds.length})
+                        {t("Push selected ({{count}})", { count: selectedPublishIds.length })}
                       </Button>
                       <Modal
-                        title="Push to DSpace"
+                        title={t("Push to DSpace")}
                         open={pushCollectionModalOpen}
                         onCancel={closePushCollectionModal}
                         destroyOnClose
                         width={720}
-                        okText="Push"
+                        okText={t("Push")}
                         confirmLoading={pushingDspace}
                         okButtonProps={{ disabled: !targetCollectionId }}
                         onOk={() => void pushSelectedToDspace()}
                       >
                         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
                           <Text>
-                            {selectedPublishIds.length} submission
-                            {selectedPublishIds.length === 1 ? "" : "s"} selected. Choose a collection
-                            in the DSpace tree.
+                            {selectedPublishIds.length === 1
+                              ? t("{{count}} submission selected. Choose a collection in the DSpace tree.", {
+                                  count: selectedPublishIds.length
+                                })
+                              : t("{{count}} submissions selected. Choose a collection in the DSpace tree.", {
+                                  count: selectedPublishIds.length
+                                })}
                           </Text>
                           {pushCollectionTreeData.length === 0 ? (
                             <Alert
                               type="info"
                               showIcon
-                              message="Chưa có cây DSpace"
-                              description="Sync DSpace trước để chọn collection."
+                              message={t("No DSpace tree yet")}
+                              description={t("Sync DSpace first to choose a collection.")}
                             />
                           ) : (
                             <Tree
@@ -1331,44 +1348,44 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                           onChange: (keys) => setSelectedPublishIds(keys)
                         }}
                         columns={[
-                          { title: "Title", dataIndex: "title", ellipsis: true },
-                          { title: "Author", dataIndex: "author", width: 160, ellipsis: true },
+                          { title: t("Title"), dataIndex: "title", ellipsis: true },
+                          { title: t("Author"), dataIndex: "author", width: 160, ellipsis: true },
                           {
-                            title: "Faculty",
+                            title: t("Faculty"),
                             dataIndex: "facultyName",
                             width: 180,
                             ellipsis: true,
                             render: (v) => v || "—"
                           },
                           {
-                            title: "Semester",
+                            title: t("Semester"),
                             width: 160,
                             ellipsis: true,
                             render: (_, row) => row.semesterName || "—"
                           },
                           {
-                            title: "Period",
+                            title: t("Period"),
                             dataIndex: "periodName",
                             width: 160,
                             ellipsis: true,
                             render: (v) => v || "—"
                           },
                           {
-                            title: "DSpace status",
+                            title: t("DSpace status"),
                             dataIndex: "dspacePublishStatus",
                             width: 120,
                             render: (s) => {
                               if (s === "published") {
-                                return <Tag color="green">published</Tag>;
+                                return <Tag color="green">{t("Published")}</Tag>;
                               }
                               if (s === "failed") {
-                                return <Tag color="red">failed</Tag>;
+                                return <Tag color="red">{t("Failed")}</Tag>;
                               }
-                              return <Tag color="gold">pending</Tag>;
+                              return <Tag color="gold">{t("Pending")}</Tag>;
                             }
                           },
                           {
-                            title: "DSpace item",
+                            title: t("DSpace item"),
                             dataIndex: "dspaceItemId",
                             width: 260,
                             render: (id) => dspaceIdText(id)
@@ -1382,7 +1399,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
             : []),
           {
             key: "browse",
-            label: "Browse & periods",
+            label: t("Browse & periods"),
             children: (
               <Space direction="vertical" size="middle" style={{ width: "100%" }}>
                 <div
@@ -1395,7 +1412,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                 >
                   <Space style={{ width: "100%", justifyContent: "space-between", marginBottom: 8 }} wrap>
                     <Space wrap>
-                      <Text strong>DSpace structure</Text>
+                      <Text strong>{t("DSpace structure")}</Text>
                       <Tag>{dspaceSyncNodes.length} nodes</Tag>
                       <Tag color="geekblue">
                         {dspaceSyncNodes.filter((n) => n.type === "community").length} communities
@@ -1409,32 +1426,26 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                         size="small"
                         loading={loadingDspaceTree}
                         onClick={() => void loadDspaceSyncNodes()}
-                      >
-                        Reload tree
-                      </Button>
+                      >{t("Reload tree")}</Button>
                       <Button
                         size="small"
                         disabled={dspaceTreeData.length === 0}
                         onClick={() =>
                           setDspaceTreeExpandedKeys(collectExpandableKeys(dspaceTreeData))
                         }
-                      >
-                        Expand all
-                      </Button>
+                      >{t("Expand all")}</Button>
                       <Button
                         size="small"
                         disabled={dspaceTreeExpandedKeys.length === 0}
                         onClick={() => setDspaceTreeExpandedKeys([])}
-                      >
-                        Collapse all
-                      </Button>
+                      >{t("Collapse all")}</Button>
                     </Space>
                   </Space>
                   {dspaceTreeData.length === 0 ? (
                     <Alert
                       type="info"
                       showIcon
-                      message="No synced DSpace communities/collections yet"
+                      message={t("No synced DSpace communities/collections yet")}
                       description='Click "Sync from DSpace" to fetch the live tree, then expand/collapse nodes here.'
                     />
                   ) : (
@@ -1457,12 +1468,10 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                 <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
                   <Space wrap>
                     {allowEdit && (
-                      <Button type="primary" onClick={openCreateSemesterModal}>
-                        Create semester
-                      </Button>
+                      <Button type="primary" onClick={openCreateSemesterModal}>{t("Create semester")}</Button>
                     )}
                     {allowEdit && (
-                      <Button onClick={openCreatePeriodModal}>Create period</Button>
+                      <Button onClick={openCreatePeriodModal}>{t("Create period")}</Button>
                     )}
                   </Space>
                   <Space wrap>
@@ -1474,25 +1483,21 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                         setExpandedFacultyKeys(ids);
                         void Promise.all(ids.map((facultyId) => loadFacultyTree(facultyId)));
                       }}
-                    >
-                      Expand all
-                    </Button>
+                    >{t("Expand all")}</Button>
                     <Button
                       size="small"
                       disabled={expandedFacultyKeys.length === 0}
                       onClick={() => setExpandedFacultyKeys([])}
-                    >
-                      Collapse all
-                    </Button>
+                    >{t("Collapse all")}</Button>
                   </Space>
                 </Space>
                 <style>{`
                   .archive-tree-row:hover { background: #f4f9fd; }
                 `}</style>
                 {loadingFaculties && faculties.length === 0 ? (
-                  <Text type="secondary">Loading faculties…</Text>
+                  <Text type="secondary">{t("Loading faculties…")}</Text>
                 ) : faculties.length === 0 ? (
-                  <Text type="secondary">No faculties</Text>
+                  <Text type="secondary">{t("No faculties")}</Text>
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                     {faculties.map((faculty) => {
@@ -1522,31 +1527,29 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                             extra={
                               <>
                                 <Tag color={faculty.status === "active" ? "green" : "default"}>
-                                  {faculty.status}
+                                  {statusText(faculty.status, t)}
                                 </Tag>
                                 <Text type="secondary">
-                                  {countLabel(faculty.semesterCount, "semester", "semesters")}
+                                  {countPhrase(faculty.semesterCount, "{{count}} semester", "{{count}} semesters", t)}
                                 </Text>
                                 <Text type="secondary">
-                                  {countLabel(faculty.openPeriodCount, "open period", "open periods")}
+                                  {countPhrase(faculty.openPeriodCount, "{{count}} open period", "{{count}} open periods", t)}
                                 </Text>
                               </>
                             }
                             actions={
-                              <Button size="small" onClick={() => void openDetail("faculty", faculty.id)}>
-                                Detail
-                              </Button>
+                              <Button size="small" onClick={() => void openDetail("faculty", faculty.id)}>{t("Detail")}</Button>
                             }
                           />
                           {facultyOpen ? (
                             <div style={{ borderTop: "1px solid #e8eef6", background: "#f8fbfe" }}>
                               {node?.loading && semesterRows.length === 0 ? (
                                 <div style={{ padding: "12px 16px 12px 52px" }}>
-                                  <Text type="secondary">Loading semesters…</Text>
+                                  <Text type="secondary">{t("Loading semesters…")}</Text>
                                 </div>
                               ) : semesterRows.length === 0 ? (
                                 <div style={{ padding: "12px 16px 12px 52px" }}>
-                                  <Text type="secondary">No semesters</Text>
+                                  <Text type="secondary">{t("No semesters")}</Text>
                                 </div>
                               ) : (
                                 semesterRows.map((semester) => {
@@ -1566,10 +1569,10 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                                         extra={
                                           <>
                                             <Tag color={semester.status === "active" ? "green" : "default"}>
-                                              {semester.status || "—"}
+                                              {semester.status ? statusText(semester.status, t) : "—"}
                                             </Tag>
                                             <Text type="secondary">
-                                              {countLabel(semester.periodCount, "period", "periods")}
+                                              {countPhrase(semester.periodCount, "{{count}} period", "{{count}} periods", t)}
                                             </Text>
                                           </>
                                         }
@@ -1577,9 +1580,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                                           <Button
                                             size="small"
                                             onClick={() => void openDetail("semester", semester.id)}
-                                          >
-                                            Detail
-                                          </Button>
+                                          >{t("Detail")}</Button>
                                         }
                                       />
                                       {semesterOpen ? (
@@ -1593,7 +1594,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                                         >
                                           {semesterPeriods.length === 0 ? (
                                             <div style={{ padding: "10px 14px" }}>
-                                              <Text type="secondary">No periods</Text>
+                                              <Text type="secondary">{t("No periods")}</Text>
                                             </div>
                                           ) : (
                                             semesterPeriods.map((period, index) => (
@@ -1607,14 +1608,14 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                                                 title={period.name}
                                                 extra={
                                                   <>
-                                                    <Tag color={periodStatusColor(period.status)}>{period.status}</Tag>
+                                                    <Tag color={periodStatusColor(period.status)}>{statusText(period.status, t)}</Tag>
                                                     <Text type="secondary">
                                                       {formatTreeDate(period.opensAt)} – {formatTreeDate(period.closesAt)}
                                                     </Text>
                                                     <Text type="secondary">
-                                                      {countLabel(period.submissionCount, "submission", "submissions")}
+                                                      {countPhrase(period.submissionCount, "{{count}} submission", "{{count}} submissions", t)}
                                                     </Text>
-                                                    {period.allowResubmit ? <Tag>Resubmit</Tag> : null}
+                                                    {period.allowResubmit ? <Tag>{t("Resubmit")}</Tag> : null}
                                                   </>
                                                 }
                                                 actions={
@@ -1622,9 +1623,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                                                     <Button
                                                       size="small"
                                                       onClick={() => void openDetail("period", period.id)}
-                                                    >
-                                                      Detail
-                                                    </Button>
+                                                    >{t("Detail")}</Button>
                                                     {allowEdit &&
                                                     period.status !== "open" &&
                                                     period.status !== "archived" ? (
@@ -1633,9 +1632,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                                                         type="primary"
                                                         loading={actionId === `open-${period.id}`}
                                                         onClick={() => periodAction(period.id, "open", period.facultyId)}
-                                                      >
-                                                        Open
-                                                      </Button>
+                                                      >{t("Open")}</Button>
                                                     ) : null}
                                                     {allowEdit && period.status === "open" ? (
                                                       <Button
@@ -1645,9 +1642,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                                                         onClick={() =>
                                                           periodAction(period.id, "close", period.facultyId)
                                                         }
-                                                      >
-                                                        Close
-                                                      </Button>
+                                                      >{t("Close")}</Button>
                                                     ) : null}
                                                   </Space>
                                                 }
@@ -1674,7 +1669,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
       />
 
       <Modal
-        title="Add faculty"
+        title={t("Add faculty")}
         open={facultyModalOpen}
         onCancel={() => {
           setFacultyModalOpen(false);
@@ -1685,14 +1680,14 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
         destroyOnClose
       >
         <Form form={facultyForm} layout="vertical" onFinish={submitFaculty}>
-          <Form.Item name="name" label="Faculty name" rules={[{ required: true, min: 2 }]}>
-            <Input placeholder="Khoa Cơ khí" />
+          <Form.Item name="name" label={t("Faculty name")} rules={[{ required: true, min: 2 }]}>
+            <Input placeholder={t("e.g. Faculty of Mechanical Engineering")} />
           </Form.Item>
         </Form>
       </Modal>
 
       <Modal
-        title="Create semester"
+        title={t("Create semester")}
         open={semesterModalOpen}
         onCancel={() => {
           setSemesterModalOpen(false);
@@ -1710,26 +1705,22 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                   semesterForm.setFieldValue("facultyId", undefined);
                 }
               }}
-            >
-              Create semester for all faculties
-            </Checkbox>
+            >{t("Create semester for all faculties")}</Checkbox>
           </Form.Item>
           <Form.Item noStyle shouldUpdate={(prev, current) => prev.forAllFaculties !== current.forAllFaculties}>
             {({ getFieldValue }) =>
               getFieldValue("forAllFaculties") ? (
-                <Paragraph type="secondary" style={{ marginTop: 0 }}>
-                  The same semester is created for every active faculty.
-                </Paragraph>
+                <Paragraph type="secondary" style={{ marginTop: 0 }}>{t("The same semester is created for every active faculty.")}</Paragraph>
               ) : (
                 <Form.Item
                   name="facultyId"
-                  label="Faculty (khoa)"
-                  rules={[{ required: true, message: "Chọn khoa" }]}
+                  label={t("Faculty")}
+                  rules={[{ required: true, message: t("Select a faculty") }]}
                 >
                   <Select
                     showSearch
                     optionFilterProp="label"
-                    placeholder="Chọn khoa"
+                    placeholder={t("Select a faculty")}
                     loading={loadingFaculties}
                     options={faculties.map((faculty) => ({
                       value: faculty.id,
@@ -1740,14 +1731,14 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
               )
             }
           </Form.Item>
-          <Form.Item name="name" label="Semester name" rules={[{ required: true, min: 2 }]}>
-            <Input placeholder="Học kỳ 1 năm 2025" />
+          <Form.Item name="name" label={t("Semester name")} rules={[{ required: true, min: 2 }]}>
+            <Input placeholder={t("e.g. Semester 1, 2025")} />
           </Form.Item>
         </Form>
       </Modal>
 
       <Modal
-        title="Create period"
+        title={t("Create period")}
         open={periodModalOpen}
         onCancel={() => {
           setPeriodModalOpen(false);
@@ -1755,13 +1746,14 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
         }}
         onOk={() => periodForm.submit()}
         confirmLoading={saving}
-        okText="Create period"
+        okText={t("Create period")}
         width={640}
         destroyOnClose
       >
         <Paragraph type="secondary">
-          Một khoa có nhiều học kỳ; một học kỳ có thể có nhiều period đang mở. Collection DSpace
-          được tạo dưới root community đã cấu hình, nếu có.
+          {t(
+            "A faculty has many semesters; a semester can have several open periods. A DSpace collection is created under the configured root community when one is set."
+          )}
         </Paragraph>
         <Form
           form={periodForm}
@@ -1773,11 +1765,11 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
             range: [dayjs().startOf("day"), dayjs().add(90, "day").endOf("day")]
           }}
         >
-          <Form.Item name="facultyId" label="Faculty (khoa)" rules={[{ required: true, message: "Chọn khoa" }]}>
+          <Form.Item name="facultyId" label={t("Faculty")} rules={[{ required: true, message: t("Select a faculty") }]}>
             <Select
               showSearch
               optionFilterProp="label"
-              placeholder="Chọn khoa"
+              placeholder={t("Select a faculty")}
               loading={loadingFaculties}
               options={faculties.map((f) => ({
                 value: f.id,
@@ -1788,46 +1780,46 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
           </Form.Item>
           <Form.Item
             name="semesterId"
-            label="Semester (học kỳ)"
-            rules={[{ required: true, message: "Chọn học kỳ" }]}
+            label={t("Semester")}
+            rules={[{ required: true, message: t("Select a semester") }]}
           >
             <Select
               showSearch
               optionFilterProp="label"
-              placeholder={configFacultyId ? "Chọn học kỳ" : "Chọn khoa trước"}
+              placeholder={configFacultyId ? t("Select a semester") : t("Select a faculty first.")}
               loading={loadingConfigSemesters}
               disabled={!configFacultyId}
               options={configSemesters.map((s) => ({
                 value: s.id,
                 label: s.name
               }))}
-              notFoundContent={loadingConfigSemesters ? "Loading…" : "Không có học kỳ cho khoa này"}
+              notFoundContent={loadingConfigSemesters ? t("Loading…") : t("No semesters for this faculty")}
             />
           </Form.Item>
           <Form.Item
             name="name"
-            label="Period name"
-            rules={[{ required: true, min: 3, message: "Nhập tên đợt nộp (≥ 3 ký tự)" }]}
+            label={t("Period name")}
+            rules={[{ required: true, min: 3, message: t("Enter a period name (at least 3 characters)") }]}
           >
-            <Input placeholder="Đợt nộp lưu chiểu HK1/2025" />
+            <Input placeholder={t("e.g. Deposit period HK1/2025")} />
           </Form.Item>
           <Form.Item
             name="range"
-            label="Thời hạn nộp bài (mở — đóng)"
-            rules={[{ required: true, message: "Chọn thời hạn nộp bài" }]}
+            label={t("Submission window (open — close)")}
+            rules={[{ required: true, message: t("Choose the submission window") }]}
           >
             <DatePicker.RangePicker showTime style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item name="allowResubmit" label="Allow resubmit on reject">
+          <Form.Item name="allowResubmit" label={t("Allow resubmit on reject")}>
             <Select
               options={[
-                { value: true, label: "Yes" },
-                { value: false, label: "No" }
+                { value: true, label: t("Yes") },
+                { value: false, label: t("No") }
               ]}
             />
           </Form.Item>
           <Form.Item name="openAfterCreate" valuePropName="checked">
-            <Checkbox>Open period immediately after creating</Checkbox>
+            <Checkbox>{t("Open period immediately after creating")}</Checkbox>
           </Form.Item>
         </Form>
       </Modal>
@@ -1835,12 +1827,12 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
       <Modal
         title={
           detailKind === "faculty"
-            ? "Faculty detail"
+            ? t("Faculty detail")
             : detailKind === "semester"
-              ? "Semester detail"
+              ? t("Semester detail")
               : detailKind === "period"
-                ? "Submission period detail"
-                : "Detail"
+                ? t("Submission period detail")
+                : t("Detail")
         }
         open={Boolean(detailKind)}
         onCancel={closeDetail}
@@ -1848,41 +1840,39 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
         destroyOnClose
         footer={
           <Space style={{ width: "100%", justifyContent: "space-between" }}>
-            <Button onClick={closeDetail}>Close</Button>
+            <Button onClick={closeDetail}>{t("Close")}</Button>
             {detailRecord &&
             ((detailKind === "faculty" && canManageFaculties) ||
               (detailKind === "semester" && canManageFaculties) ||
               (detailKind === "period" && allowEdit)) ? (
               <Space>
-                <Button onClick={openEditFromDetail}>Edit</Button>
+                <Button onClick={openEditFromDetail}>{t("Edit")}</Button>
                 <Button
                   danger
                   loading={actionId === `delete-${detailRecord.id}`}
                   onClick={confirmDeleteFromDetail}
-                >
-                  Delete
-                </Button>
+                >{t("Delete")}</Button>
               </Space>
             ) : null}
           </Space>
         }
       >
         {detailLoading || !detailRecord ? (
-          <Text type="secondary">Loading…</Text>
+          <Text type="secondary">{t("Loading…")}</Text>
         ) : (
           <Space direction="vertical" size="middle" style={{ width: "100%" }}>
             {detailKind === "faculty" && (
               <>
                 <Space size="large" wrap>
-                  <Statistic title="Semesters" value={detailRecord.semesterCount ?? 0} />
-                  <Statistic title="Submission periods" value={detailRecord.periodCount ?? 0} />
-                  <Statistic title="Submissions" value={detailRecord.submissionCount ?? 0} />
+                  <Statistic title={t("Semesters")} value={detailRecord.semesterCount ?? 0} />
+                  <Statistic title={t("Submission periods")} value={detailRecord.periodCount ?? 0} />
+                  <Statistic title={t("Submissions")} value={detailRecord.submissionCount ?? 0} />
                 </Space>
                 <Descriptions column={1} size="small" bordered>
-                  <Descriptions.Item label="Name">{detailRecord.name}</Descriptions.Item>
-                  <Descriptions.Item label="Status">
+                  <Descriptions.Item label={t("Name")}>{detailRecord.name}</Descriptions.Item>
+                  <Descriptions.Item label={t("Status")}>
                     <Tag color={detailRecord.status === "active" ? "green" : "default"}>
-                      {detailRecord.status}
+                      {statusText(detailRecord.status, t)}
                     </Tag>
                   </Descriptions.Item>
                 </Descriptions>
@@ -1891,14 +1881,14 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
             {detailKind === "semester" && (
               <>
                 <Space size="large" wrap>
-                  <Statistic title="Submission periods" value={detailRecord.periodCount ?? 0} />
-                  <Statistic title="Submissions" value={detailRecord.submissionCount ?? 0} />
+                  <Statistic title={t("Submission periods")} value={detailRecord.periodCount ?? 0} />
+                  <Statistic title={t("Submissions")} value={detailRecord.submissionCount ?? 0} />
                 </Space>
                 <Descriptions column={1} size="small" bordered>
-                  <Descriptions.Item label="Name">{detailRecord.name}</Descriptions.Item>
-                  <Descriptions.Item label="Status">
+                  <Descriptions.Item label={t("Name")}>{detailRecord.name}</Descriptions.Item>
+                  <Descriptions.Item label={t("Status")}>
                     <Tag color={detailRecord.status === "active" ? "green" : "default"}>
-                      {detailRecord.status || "—"}
+                      {detailRecord.status ? statusText(detailRecord.status, t) : "—"}
                     </Tag>
                   </Descriptions.Item>
                 </Descriptions>
@@ -1907,24 +1897,24 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
             {detailKind === "period" && (
               <>
                 <Space size="large" wrap>
-                  <Statistic title="Submissions" value={detailRecord.submissionCount ?? 0} />
+                  <Statistic title={t("Submissions")} value={detailRecord.submissionCount ?? 0} />
                 </Space>
                 <Descriptions column={1} size="small" bordered>
-                  <Descriptions.Item label="Name">{detailRecord.name}</Descriptions.Item>
-                  <Descriptions.Item label="Semester">
+                  <Descriptions.Item label={t("Name")}>{detailRecord.name}</Descriptions.Item>
+                  <Descriptions.Item label={t("Semester")}>
                     {detailRecord.semesterName || "—"}
                   </Descriptions.Item>
-                  <Descriptions.Item label="Status">
-                    <Tag color={periodStatusColor(detailRecord.status)}>{detailRecord.status}</Tag>
+                  <Descriptions.Item label={t("Status")}>
+                    <Tag color={periodStatusColor(detailRecord.status)}>{statusText(detailRecord.status, t)}</Tag>
                   </Descriptions.Item>
-                  <Descriptions.Item label="Opens">
-                    {new Date(detailRecord.opensAt).toLocaleString()}
+                  <Descriptions.Item label={t("Opens")}>
+                    {formatDateTime(detailRecord.opensAt, lang)}
                   </Descriptions.Item>
-                  <Descriptions.Item label="Closes">
-                    {new Date(detailRecord.closesAt).toLocaleString()}
+                  <Descriptions.Item label={t("Closes")}>
+                    {formatDateTime(detailRecord.closesAt, lang)}
                   </Descriptions.Item>
-                  <Descriptions.Item label="Allow resubmit">
-                    {detailRecord.allowResubmit ? "Yes" : "No"}
+                  <Descriptions.Item label={t("Allow resubmit")}>
+                    {detailRecord.allowResubmit ? t("Yes") : t("No")}
                   </Descriptions.Item>
                 </Descriptions>
               </>
@@ -1955,14 +1945,14 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
         <Form form={editForm} layout="vertical" onFinish={submitEdit}>
           {editKind === "faculty" && (
             <>
-              <Form.Item name="name" label="Faculty name" rules={[{ required: true, min: 2 }]}>
+              <Form.Item name="name" label={t("Faculty name")} rules={[{ required: true, min: 2 }]}>
                 <Input />
               </Form.Item>
-              <Form.Item name="status" label="Status" rules={[{ required: true }]}>
+              <Form.Item name="status" label={t("Status")} rules={[{ required: true }]}>
                 <Select
                   options={[
-                    { value: "active", label: "active" },
-                    { value: "inactive", label: "inactive" }
+                    { value: "active", label: t("active") },
+                    { value: "inactive", label: t("inactive") }
                   ]}
                 />
               </Form.Item>
@@ -1970,14 +1960,14 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
           )}
           {editKind === "semester" && (
             <>
-              <Form.Item name="name" label="Display name" rules={[{ required: true, min: 2 }]}>
+              <Form.Item name="name" label={t("Display name")} rules={[{ required: true, min: 2 }]}>
                 <Input />
               </Form.Item>
-              <Form.Item name="status" label="Status" rules={[{ required: true }]}>
+              <Form.Item name="status" label={t("Status")} rules={[{ required: true }]}>
                 <Select
                   options={[
-                    { value: "active", label: "active" },
-                    { value: "inactive", label: "inactive" }
+                    { value: "active", label: t("active") },
+                    { value: "inactive", label: t("inactive") }
                   ]}
                 />
               </Form.Item>
@@ -1985,17 +1975,17 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
           )}
           {editKind === "period" && (
             <>
-              <Form.Item name="name" label="Period name" rules={[{ required: true, min: 3 }]}>
+              <Form.Item name="name" label={t("Period name")} rules={[{ required: true, min: 3 }]}>
                 <Input />
               </Form.Item>
-              <Form.Item name="range" label="Open — close" rules={[{ required: true }]}>
+              <Form.Item name="range" label={t("Open — close")} rules={[{ required: true }]}>
                 <DatePicker.RangePicker showTime style={{ width: "100%" }} />
               </Form.Item>
-              <Form.Item name="allowResubmit" label="Allow resubmit on reject">
+              <Form.Item name="allowResubmit" label={t("Allow resubmit on reject")}>
                 <Select
                   options={[
-                    { value: true, label: "Yes" },
-                    { value: false, label: "No" }
+                    { value: true, label: t("Yes") },
+                    { value: false, label: t("No") }
                   ]}
                 />
               </Form.Item>
@@ -2004,7 +1994,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
         </Form>
       </Modal>
       <Modal
-        title="DSpace sync result"
+        title={t("DSpace sync result")}
         open={Boolean(syncResult)}
         onCancel={() => setSyncResult(null)}
         onOk={() => setSyncResult(null)}
@@ -2014,22 +2004,24 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
         {syncResult ? (
           <Space direction="vertical" size="middle" style={{ width: "100%" }}>
             <Text>
-              Sync scope:{" "}
+              {t("Sync scope:")}{" "}
               {syncResult.rootCommunityId ? (
                 <>
-                  configured root <Text code>{syncResult.rootCommunityId}</Text>
+                  {t("configured root")} <Text code>{syncResult.rootCommunityId}</Text>
                 </>
               ) : (
-                <Text>all top-level communities</Text>
+                <Text>{t("all top-level communities")}</Text>
               )}
             </Text>
             <Alert
               type="success"
               showIcon
-              message={`Indexed ${syncResult.stats?.total ?? syncResult.nodes?.length ?? 0} nodes (${
-                syncResult.stats?.communities ?? 0
-              } communities, ${syncResult.stats?.collections ?? 0} collections)`}
-              description="Portal faculty / semester / period structure is unchanged. Expand or collapse the DSpace tree below."
+              message={t("Indexed {{total}} nodes ({{communities}} communities, {{collections}} collections)", {
+                total: syncResult.stats?.total ?? syncResult.nodes?.length ?? 0,
+                communities: syncResult.stats?.communities ?? 0,
+                collections: syncResult.stats?.collections ?? 0
+              })}
+              description={t("Portal faculty / semester / period structure is unchanged. Expand or collapse the DSpace tree below.")}
             />
             <Space wrap>
               <Button
@@ -2037,16 +2029,12 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                 onClick={() =>
                   setDspaceTreeExpandedKeys(collectExpandableKeys(buildDspaceTreeData(syncResult.nodes || [])))
                 }
-              >
-                Expand all
-              </Button>
-              <Button size="small" onClick={() => setDspaceTreeExpandedKeys([])}>
-                Collapse all
-              </Button>
+              >{t("Expand all")}</Button>
+              <Button size="small" onClick={() => setDspaceTreeExpandedKeys([])}>{t("Collapse all")}</Button>
             </Space>
             <Tree
               showLine
-              treeData={buildDspaceTreeData(syncResult.nodes || [])}
+              treeData={buildDspaceTreeData(syncResult.nodes || [], { t })}
               expandedKeys={dspaceTreeExpandedKeys}
               onExpand={(keys) => setDspaceTreeExpandedKeys(keys.map(String))}
               style={{ maxHeight: 420, overflow: "auto" }}

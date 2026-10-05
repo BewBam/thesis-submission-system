@@ -22,6 +22,18 @@ import {
 import { InboxOutlined } from "@ant-design/icons";
 import AdminPanel from "./AdminPanel.jsx";
 import LibraryArchivePanel from "./LibraryArchivePanel.jsx";
+import { translateApiMessage } from "./i18n/api";
+import { LanguageSwitch, useI18n } from "./i18n/I18nProvider";
+import {
+  decisionText,
+  documentTypeText,
+  fieldDisplayLabel,
+  formatDate,
+  formatDateTime,
+  languageCodeText,
+  optionDisplayLabel,
+  statusText
+} from "./i18n/labels";
 
 const STORAGE_KEY = "thesis_portal_auth";
 const BRAND_SECONDARY = "#132d65";
@@ -284,16 +296,16 @@ function canStudentSaveDraft(allSubmissions, userId, editingRecord) {
   return !studentBlocksNewDraftOrSubmit(allSubmissions, userId, undefined);
 }
 
-function validateThesisPdf(file) {
+function validateThesisPdf(file, t) {
   const name = String(file?.name || "").toLowerCase();
   const type = String(file?.type || "").toLowerCase();
   const mimeOk = !type || type === "application/pdf" || type === "application/x-pdf";
   if (!name.endsWith(".pdf") || !mimeOk) {
-    message.error("Thesis file must be PDF");
+    message.error(t("Thesis file must be PDF"));
     return false;
   }
   if (file.size > THESIS_MAX_FILE_SIZE_BYTES) {
-    message.error(`Thesis PDF must be at most ${THESIS_MAX_FILE_SIZE_MB} MB`);
+    message.error(t("Thesis PDF must be at most {{n}} MB", { n: THESIS_MAX_FILE_SIZE_MB }));
     return false;
   }
   return true;
@@ -357,7 +369,7 @@ function thesisStatusColor(status) {
   return "default";
 }
 
-function eventLabel(eventType) {
+function eventLabel(eventType, t) {
   const labels = {
     submitted: "Submitted",
     draft_saved: "Draft saved",
@@ -374,7 +386,8 @@ function eventLabel(eventType) {
     admin_rejected: "Admin rejected",
     status_changed: "Status changed"
   };
-  return labels[eventType] || eventType;
+  const key = labels[eventType];
+  return key ? t(key) : eventType;
 }
 
 function eventColor(eventType) {
@@ -432,18 +445,20 @@ const WORKFLOW_ROLE_LABELS = {
   system: "System"
 };
 
-function humanWorkflowStatus(status) {
+function humanWorkflowStatus(status, t) {
   if (!status) {
-    return "Unknown";
+    return t("Unknown");
   }
-  return WORKFLOW_STATUS_LABELS[status] || String(status).replaceAll("_", " ");
+  const key = WORKFLOW_STATUS_LABELS[status];
+  return key ? t(key) : String(status).replaceAll("_", " ");
 }
 
-function humanWorkflowRole(role) {
+function humanWorkflowRole(role, t) {
   if (!role) {
-    return "Unknown";
+    return t("Unknown");
   }
-  return WORKFLOW_ROLE_LABELS[role] || String(role).replaceAll("_", " ");
+  const key = WORKFLOW_ROLE_LABELS[role];
+  return key ? t(key) : String(role).replaceAll("_", " ");
 }
 
 function eventComment(payload) {
@@ -451,7 +466,7 @@ function eventComment(payload) {
   return comment || null;
 }
 
-function formatEventPayload(eventType, payload) {
+function formatEventPayload(eventType, payload, t) {
   if (!payload || typeof payload !== "object") {
     return null;
   }
@@ -459,16 +474,18 @@ function formatEventPayload(eventType, payload) {
   if (eventType === "submitted" || eventType === "draft_saved" || eventType === "draft_updated") {
     const parts = [];
     if (payload.title) {
-      parts.push(`Title: ${payload.title}`);
+      parts.push(t("Title: {{title}}", { title: payload.title }));
     }
     if (eventType === "submitted") {
       const authorCount = Array.isArray(payload.authorIds) ? payload.authorIds.length : null;
       const reviewerCount = Array.isArray(payload.reviewerIds) ? payload.reviewerIds.length : null;
       if (authorCount != null) {
-        parts.push(`${authorCount} author${authorCount === 1 ? "" : "s"}`);
+        parts.push(t(authorCount === 1 ? "{{count}} author" : "{{count}} authors", { count: authorCount }));
       }
       if (reviewerCount != null) {
-        parts.push(`${reviewerCount} reviewer${reviewerCount === 1 ? "" : "s"}`);
+        parts.push(
+          t(reviewerCount === 1 ? "{{count}} reviewer" : "{{count}} reviewers", { count: reviewerCount })
+        );
       }
     }
     return parts.length > 0 ? parts.join(" · ") : null;
@@ -476,21 +493,25 @@ function formatEventPayload(eventType, payload) {
 
   if (eventType === "resubmitted") {
     const updates = [];
-    if (payload.titleUpdated) updates.push("title");
-    if (payload.abstractUpdated) updates.push("abstract");
-    if (payload.thesisFileReplaced) updates.push("thesis file");
-    return updates.length > 0 ? `Updated: ${updates.join(", ")}` : "Resubmitted without tracked field changes";
+    if (payload.titleUpdated) updates.push(t("title"));
+    if (payload.abstractUpdated) updates.push(t("abstract"));
+    if (payload.thesisFileReplaced) updates.push(t("thesis file"));
+    return updates.length > 0
+      ? t("Updated: {{fields}}", { fields: updates.join(", ") })
+      : t("Resubmitted without tracked field changes");
   }
 
   if (eventType === "reverted_to_draft") {
-    return payload.fromStatus ? `From ${humanWorkflowStatus(payload.fromStatus)}` : "Moved back to draft";
+    return payload.fromStatus
+      ? t("From {{status}}", { status: humanWorkflowStatus(payload.fromStatus, t) })
+      : t("Moved back to draft");
   }
 
   if (eventType === "status_changed") {
-    const from = payload.from ? humanWorkflowStatus(payload.from) : "";
-    const to = payload.to ? humanWorkflowStatus(payload.to) : "";
+    const from = payload.from ? humanWorkflowStatus(payload.from, t) : "";
+    const to = payload.to ? humanWorkflowStatus(payload.to, t) : "";
     const reason = payload.reason
-      ? WORKFLOW_REASON_LABELS[payload.reason] || String(payload.reason).replaceAll("_", " ")
+      ? t(WORKFLOW_REASON_LABELS[payload.reason] || String(payload.reason).replaceAll("_", " "))
       : "";
     if (from && to && from !== to) {
       return `${from} → ${to}`;
@@ -504,7 +525,9 @@ function formatEventPayload(eventType, payload) {
     eventType === "director_rejected" ||
     eventType === "admin_rejected"
   ) {
-    return eventComment(payload) ? `Reason: ${eventComment(payload)}` : "No reason provided";
+    return eventComment(payload)
+      ? t("Reason: {{reason}}", { reason: eventComment(payload) })
+      : t("No reason provided");
   }
 
   return eventComment(payload);
@@ -543,6 +566,8 @@ function authHeaders(token) {
 }
 
 function App() {
+  const { t, lang } = useI18n();
+  const tr = (value) => translateApiMessage(value, t);
   const [loginForm] = Form.useForm();
   const [passwordForm] = Form.useForm();
   const [submissionForm] = Form.useForm();
@@ -611,14 +636,14 @@ function App() {
     }
     if (oauthError) {
       const oauthMessages = {
-        domain: "Only verified @hcmut.edu.vn Google accounts can sign in.",
-        not_registered: "This account has not been created. Ask an administrator to add you to a faculty first.",
-        cancelled: "Google sign-in was cancelled.",
-        disabled: "This account has been disabled.",
-        maintenance: "System is in maintenance mode. Only administrators can sign in.",
-        oauth: "Google sign-in failed. Please try again."
+        domain: t("Only verified @hcmut.edu.vn Google accounts can sign in."),
+        not_registered: t("This account has not been created. Ask an administrator to add you to a faculty first."),
+        cancelled: t("Google sign-in was cancelled."),
+        disabled: t("This account has been disabled."),
+        maintenance: t("System is in maintenance mode. Only administrators can sign in."),
+        oauth: t("Google sign-in failed. Please try again.")
       };
-      message.error(oauthMessages[oauthError] || "Google sign-in failed. Please try again.");
+      message.error(oauthMessages[oauthError] || t("Google sign-in failed. Please try again."));
     }
 
     const finishGoogleSession = async (token) => {
@@ -633,9 +658,9 @@ function App() {
         const nextAuth = { token, user };
         setAuth(nextAuth);
         localStorage.setItem(STORAGE_KEY, JSON.stringify(nextAuth));
-        message.success("Login successful");
+        message.success(t("Login successful"));
       } catch (error) {
-        message.error(error.message || "Unable to complete Google sign-in");
+        message.error(tr(error.message || "Unable to complete Google sign-in"));
       }
     };
 
@@ -688,8 +713,8 @@ function App() {
     if (!auth?.user) {
       return "";
     }
-    return `Welcome back, ${auth.user.username}.`;
-  }, [auth]);
+    return t("Welcome back, {{name}}.", { name: auth.user.username });
+  }, [auth, t]);
 
   const reviewerFiltered = useMemo(
     () => filterBySearchAndArchive(reviewerQueue, reviewerSearch, reviewerSemesterFilter, reviewerPeriodFilter),
@@ -905,53 +930,53 @@ function App() {
 
   const submissionColumns = [
     {
-      title: "Title (EN)",
+      title: t("Title (EN)"),
       dataIndex: "title_en",
       key: "title_en",
       ellipsis: true,
       render: (_v, record) => record.title_en || record.title || "—"
     },
     {
-      title: "Faculty",
+      title: t("Faculty"),
       dataIndex: "faculty_name",
       key: "faculty_name",
       ellipsis: true,
       render: (value, record) => value || record.faculty_name || "—"
     },
     {
-      title: "Authors",
+      title: t("Authors"),
       dataIndex: "author",
       key: "author",
       ellipsis: true
     },
     {
-      title: "Reviewers",
+      title: t("Reviewers"),
       dataIndex: "reviewer",
       key: "reviewer"
     },
     {
-      title: "Status",
+      title: t("Status"),
       dataIndex: "status",
       key: "status",
-      render: (status) => <Tag color={thesisStatusColor(status)}>{status}</Tag>
+      render: (status) => <Tag color={thesisStatusColor(status)}>{statusText(status, t)}</Tag>
     },
     {
-      title: "Reviewer Decisions",
+      title: t("Reviewer Decisions"),
       key: "reviews",
       width: 340,
       render: (_value, record) => {
         const reviews = Array.isArray(record.reviews) ? record.reviews : [];
         if (reviews.length === 0) {
-          return <Text type="secondary">No reviewer decision yet</Text>;
+          return <Text type="secondary">{t("No reviewer decision yet")}</Text>;
         }
         return (
           <Space direction="vertical" size={2} style={{ width: "100%" }}>
             {reviews.map((review, idx) => (
               <div key={`${review.reviewerId || review.username || idx}-${idx}`}>
-                <Text strong>{review.reviewer || review.username || "Reviewer"}</Text>{" "}
-                <Tag color={reviewDecisionColor(review.decision)}>{review.decision}</Tag>
+                <Text strong>{review.reviewer || review.username || t("Reviewer")}</Text>{" "}
+                <Tag color={reviewDecisionColor(review.decision)}>{decisionText(review.decision, t)}</Tag>
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  {review.decidedAt ? `at ${new Date(review.decidedAt).toLocaleString()}` : "waiting"}
+                  {review.decidedAt ? t("at {{time}}", { time: formatDateTime(review.decidedAt, lang) }) : t("waiting")}
                 </Text>
               </div>
             ))}
@@ -960,13 +985,13 @@ function App() {
       }
     },
     {
-      title: "Submitted At",
+      title: t("Submitted At"),
       dataIndex: "created_at",
       key: "created_at",
-      render: (createdAt) => new Date(createdAt).toLocaleString()
+      render: (createdAt) => formatDateTime(createdAt, lang)
     },
     {
-      title: "Actions",
+      title: t("Actions"),
       key: "actions",
       width: 180,
       render: (_value, record) => {
@@ -974,9 +999,7 @@ function App() {
         return (
           <Space size={0}>
             {isAdminActor || caps.canEdit ? (
-              <Button type="link" size="small" onClick={() => void loadSubmissionIntoForm(record)}>
-                Edit
-              </Button>
+              <Button type="link" size="small" onClick={() => void loadSubmissionIntoForm(record)}>{t("Edit")}</Button>
             ) : null}
             {caps.canDelete ? (
               <Button
@@ -984,13 +1007,9 @@ function App() {
                 size="small"
                 danger
                 onClick={() => promptDeleteSubmission(record)}
-              >
-                Delete
-              </Button>
+              >{t("Delete")}</Button>
             ) : null}
-            <Button type="link" size="small" onClick={() => setStudentDetailRecord(record)}>
-              Detail
-            </Button>
+            <Button type="link" size="small" onClick={() => setStudentDetailRecord(record)}>{t("Detail")}</Button>
           </Space>
         );
       }
@@ -999,14 +1018,14 @@ function App() {
 
   const adminSubmissionColumns = [
     {
-      title: "Title",
+      title: t("Title"),
       dataIndex: "title",
       key: "title",
       ellipsis: true,
       width: 180
     },
     {
-      title: "Submitter",
+      title: t("Submitter"),
       key: "submitter",
       ellipsis: true,
       width: 140,
@@ -1023,28 +1042,28 @@ function App() {
       )
     },
     {
-      title: "Authors",
+      title: t("Authors"),
       dataIndex: "author",
       key: "author",
       ellipsis: true,
       width: 160
     },
     {
-      title: "Reviewers",
+      title: t("Reviewers"),
       dataIndex: "reviewer",
       key: "reviewer",
       ellipsis: true,
       width: 160
     },
     {
-      title: "Abstract",
+      title: t("Abstract"),
       dataIndex: "abstract",
       key: "abstract",
       ellipsis: true,
       width: 200
     },
     {
-      title: "DSpace",
+      title: t("DSpace"),
       dataIndex: "dspace_item_id",
       key: "dspace_item_id",
       width: 100,
@@ -1052,18 +1071,18 @@ function App() {
       render: (v) => (v ? <Text code>{v}</Text> : "—")
     },
     {
-      title: "Status",
+      title: t("Status"),
       dataIndex: "status",
       key: "status",
       width: 100,
-      render: (status) => <Tag color={thesisStatusColor(status)}>{status}</Tag>
+      render: (status) => <Tag color={thesisStatusColor(status)}>{statusText(status, t)}</Tag>
     },
     {
-      title: "Submitted At",
+      title: t("Submitted At"),
       dataIndex: "created_at",
       key: "created_at",
       width: 160,
-      render: (createdAt) => new Date(createdAt).toLocaleString()
+      render: (createdAt) => formatDateTime(createdAt, lang)
     },
     {
       title: " ",
@@ -1073,13 +1092,9 @@ function App() {
       render: (_v, record) => (
         <Space size={0}>
           {isAdminActor ? (
-            <Button type="link" size="small" onClick={() => void handleAdminEditSubmission(record)}>
-              Edit
-            </Button>
+            <Button type="link" size="small" onClick={() => void handleAdminEditSubmission(record)}>{t("Edit")}</Button>
           ) : null}
-          <Button type="link" size="small" onClick={() => setStaffDetailRecord(record)}>
-            Full detail
-          </Button>
+          <Button type="link" size="small" onClick={() => setStaffDetailRecord(record)}>{t("Full detail")}</Button>
         </Space>
       )
     }
@@ -1103,7 +1118,7 @@ function App() {
       window.open(objectUrl, "_blank", "noopener,noreferrer");
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 120000);
     } catch (error) {
-      message.error(error.message || "Unable to open file");
+      message.error(tr(error.message || "Unable to open file"));
     } finally {
       setFileOpenLoadingKey(null);
     }
@@ -1111,34 +1126,34 @@ function App() {
 
   const reviewerQueueColumns = [
     {
-      title: "Title",
+      title: t("Title"),
       dataIndex: "title",
       key: "title",
       width: 200,
       ellipsis: true
     },
     {
-      title: "Authors",
+      title: t("Authors"),
       dataIndex: "author",
       key: "author",
       width: 200,
       ellipsis: true
     },
     {
-      title: "Reviewers (assigned)",
+      title: t("Reviewers (assigned)"),
       dataIndex: "reviewer",
       key: "reviewer",
       width: 200,
       ellipsis: true
     },
     {
-      title: "Abstract",
+      title: t("Abstract"),
       dataIndex: "abstract",
       key: "abstract",
       ellipsis: true
     },
     {
-      title: "Files",
+      title: t("Files"),
       key: "files",
       width: 220,
       render: (_v, record) => {
@@ -1174,38 +1189,32 @@ function App() {
       }
     },
     {
-      title: "Submitted At",
+      title: t("Submitted At"),
       dataIndex: "created_at",
       key: "created_at",
       width: 180,
-      render: (createdAt) => new Date(createdAt).toLocaleString()
+      render: (createdAt) => formatDateTime(createdAt, lang)
     },
     {
-      title: "Actions",
+      title: t("Actions"),
       key: "actions",
       width: 280,
       render: (_value, record) => {
         const isPendingForMe = record.my_decision === "pending";
         return (
           <Space>
-            <Button type="link" size="small" onClick={() => setReviewerDetailRecord(record)}>
-              Detail
-            </Button>
+            <Button type="link" size="small" onClick={() => setReviewerDetailRecord(record)}>{t("Detail")}</Button>
             {isPendingForMe ? (
               <>
                 <Button
                   type="primary"
                   loading={reviewActionLoadingId === record.id}
                   onClick={() => submitReviewAction(record.id, "approve")}
-                >
-                  Approve
-                </Button>
-                <Button danger loading={reviewActionLoadingId === record.id} onClick={() => openRejectModal(record.id)}>
-                  Reject
-                </Button>
+                >{t("Approve")}</Button>
+                <Button danger loading={reviewActionLoadingId === record.id} onClick={() => openRejectModal(record.id)}>{t("Reject")}</Button>
               </>
             ) : (
-              <Tag color={reviewDecisionColor(record.my_decision)}>{record.my_decision}</Tag>
+              <Tag color={reviewDecisionColor(record.my_decision)}>{decisionText(record.my_decision, t)}</Tag>
             )}
           </Space>
         );
@@ -1225,55 +1234,51 @@ function App() {
 
   const buildStageQueueColumns = (loadingId, onApprove, onReject, approveLabel) => [
     {
-      title: "Title",
+      title: t("Title"),
       dataIndex: "title",
       key: "title",
       width: 220,
       ellipsis: true
     },
     {
-      title: "Authors",
+      title: t("Authors"),
       dataIndex: "author",
       key: "author",
       width: 220,
       ellipsis: true
     },
     {
-      title: "Reviewers",
+      title: t("Reviewers"),
       dataIndex: "reviewer",
       key: "reviewer",
       width: 220,
       ellipsis: true
     },
     {
-      title: "Status",
+      title: t("Status"),
       dataIndex: "submission_status",
       key: "submission_status",
       width: 120,
-      render: (status) => <Tag color={thesisStatusColor(status)}>{status}</Tag>
+      render: (status) => <Tag color={thesisStatusColor(status)}>{statusText(status, t)}</Tag>
     },
     {
-      title: "Submitted At",
+      title: t("Submitted At"),
       dataIndex: "created_at",
       key: "created_at",
       width: 180,
-      render: (createdAt) => new Date(createdAt).toLocaleString()
+      render: (createdAt) => formatDateTime(createdAt, lang)
     },
     {
-      title: "Actions",
+      title: t("Actions"),
       key: "actions",
       width: 320,
       render: (_value, record) => (
         <Space>
-          <Button type="link" size="small" onClick={() => openQueueSubmissionDetail(record)}>
-            Detail
-          </Button>
+          <Button type="link" size="small" onClick={() => openQueueSubmissionDetail(record)}>{t("Detail")}</Button>
           <Button type="primary" loading={loadingId === record.id} onClick={() => onApprove(record.id)}>
             {approveLabel}
           </Button>
-          <Button danger loading={loadingId === record.id} onClick={() => onReject(record.id)}>
-            Reject
-          </Button>
+          <Button danger loading={loadingId === record.id} onClick={() => onReject(record.id)}>{t("Reject")}</Button>
         </Space>
       )
     }
@@ -1293,7 +1298,7 @@ function App() {
       }
       setStaffSubmissions(payload);
     } catch (error) {
-      message.error(error.message || "Unable to load all submissions");
+      message.error(tr(error.message || "Unable to load all submissions"));
     } finally {
       setIsLoadingSubmissions(false);
     }
@@ -1313,7 +1318,7 @@ function App() {
       }
       setLibraryQueue(payload);
     } catch (error) {
-      message.error(error.message || "Unable to load library intake queue");
+      message.error(tr(error.message || "Unable to load library intake queue"));
     } finally {
       setIsLoadingLibraryQueue(false);
     }
@@ -1333,7 +1338,7 @@ function App() {
       }
       setDirectorQueue(payload);
     } catch (error) {
-      message.error(error.message || "Unable to load director archive queue");
+      message.error(tr(error.message || "Unable to load director archive queue"));
     } finally {
       setIsLoadingDirectorQueue(false);
     }
@@ -1382,7 +1387,7 @@ function App() {
         return null;
       });
     } catch (error) {
-      message.error(error.message || "Unable to load submission list");
+      message.error(tr(error.message || "Unable to load submission list"));
     } finally {
       setIsLoadingSubmissions(false);
     }
@@ -1418,7 +1423,7 @@ function App() {
       }
       setReviewerQueue(payload);
     } catch (error) {
-      message.error(error.message || "Unable to load reviewer queue");
+      message.error(tr(error.message || "Unable to load reviewer queue"));
     } finally {
       setIsLoadingReviewerQueue(false);
     }
@@ -1448,7 +1453,7 @@ function App() {
         }))
       );
     } catch (error) {
-      message.error(error.message || "Unable to load reviewer list");
+      message.error(tr(error.message || "Unable to load reviewer list"));
     } finally {
       setIsLoadingReviewers(false);
     }
@@ -1471,7 +1476,7 @@ function App() {
         }))
       );
     } catch (error) {
-      message.error(error.message || "Unable to load faculties");
+      message.error(tr(error.message || "Unable to load faculties"));
     } finally {
       setIsLoadingArchiveFaculties(false);
     }
@@ -1498,7 +1503,7 @@ function App() {
       setArchiveSemesters(options);
       return options;
     } catch (error) {
-      message.error(error.message || "Unable to load semesters");
+      message.error(tr(error.message || "Unable to load semesters"));
       setArchiveSemesters([]);
       return [];
     } finally {
@@ -1524,7 +1529,7 @@ function App() {
       setArchivePeriods(payload);
       return payload;
     } catch (error) {
-      message.error(error.message || "Unable to load submission periods");
+      message.error(tr(error.message || "Unable to load submission periods"));
       setArchivePeriods([]);
       return [];
     } finally {
@@ -1566,7 +1571,7 @@ function App() {
         }))
       );
     } catch (error) {
-      message.error(error.message || "Unable to load student list");
+      message.error(tr(error.message || "Unable to load student list"));
     } finally {
       setIsLoadingStudents(false);
     }
@@ -1650,12 +1655,12 @@ function App() {
       };
       setAuth(nextAuth);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(nextAuth));
-      message.success("Login successful");
+      message.success(t("Login successful"));
     } catch (error) {
       if (error.name === "AbortError") {
-        message.error("Login timeout. Please check backend server or Docker network.");
+        message.error(t("Login timeout. Please check backend server or Docker network."));
       } else {
-        message.error(error.message || "Unable to login");
+        message.error(tr(error.message || "Unable to login"));
       }
     } finally {
       clearTimeout(timeoutId);
@@ -1823,7 +1828,7 @@ function App() {
     }
     const thesisFile = values.thesisFile?.[0]?.originFileObj;
     if (thesisFile) {
-      if (!validateThesisPdf(thesisFile)) {
+      if (!validateThesisPdf(thesisFile, t)) {
         return null;
       }
       formData.append("thesisFile", thesisFile);
@@ -1869,7 +1874,7 @@ function App() {
   const loadSubmissionIntoForm = async (record) => {
     const recordStudentId = record.submitter_id;
     if (!isAdminActor && !isSubmissionSubmitter(record, auth.user.id)) {
-      message.warning("Only the submitter can edit this thesis. Use Detail to view.");
+      message.warning(t("Only the submitter can edit this thesis. Use Detail to view."));
       return;
     }
     if (isAdminActor && recordStudentId) {
@@ -1884,7 +1889,7 @@ function App() {
     const semesterId = record.semester_id || undefined;
     const periodId = record.submission_period_id || undefined;
     const semesterLabel = record.semester_name || semesterId;
-    const periodLabel = record.period_name || "Saved submission period";
+    const periodLabel = record.period_name || t("Saved submission period");
 
     const withSavedSemester = (options) => {
       if (!semesterId || options.some((item) => item.value === semesterId)) {
@@ -1969,11 +1974,11 @@ function App() {
         throw new Error(payload?.message || "Failed to delete");
       }
       if (payload?.dspaceDeleteWarning) {
-        message.warning("Deleted from Portal, but DSpace item may still exist — check logs");
+        message.warning(t("Deleted from Portal, but DSpace item may still exist — check logs"));
       } else if (payload?.dspaceDeleted) {
-        message.success("Deleted from Portal and DSpace");
+        message.success(t("Deleted from Portal and DSpace"));
       } else {
-        message.success("Deleted");
+        message.success(t("Deleted"));
       }
       if (editingSubmissionId === submissionId) {
         resetSubmissionForm();
@@ -1996,38 +2001,41 @@ function App() {
         }
       }
     } catch (error) {
-      message.error(error.message || "Failed to delete");
+      message.error(tr(error.message || "Failed to delete"));
     } finally {
       setIsDeletingSubmission(false);
     }
   };
 
   const promptDeleteSubmission = (record) => {
-    const title = record.title_en || record.title || "this thesis";
+    const title = record.title_en || record.title || t("this thesis");
     Modal.confirm({
-      title: "Delete thesis?",
-      content: `Delete "${title}"? This cannot be undone.`,
-      okText: "Delete",
+      title: t("Delete thesis?"),
+      content: t('Delete "{{title}}"? This cannot be undone.', { title }),
+      okText: t("Delete"),
       okType: "danger",
-      cancelText: "Cancel",
+      cancelText: t("Cancel"),
       onOk: () => handleDeleteSubmission(record.id)
     });
   };
 
   const promptStaffDeleteSubmission = (record) => {
-    const title = record.title_en || record.title || "this thesis";
+    const title = record.title_en || record.title || t("this thesis");
     const archived = record.status === "archived";
     const hasDspace = Boolean(record.dspace_item_id && !String(record.dspace_item_id).startsWith("dev-item-"));
     Modal.confirm({
-      title: "Delete submission?",
+      title: t("Delete submission?"),
       content: archived
         ? hasDspace
-          ? `Delete "${title}" from Portal and remove the linked DSpace item (${record.dspace_item_id})? This cannot be undone.`
-          : `Delete archived submission "${title}"? This cannot be undone.`
-        : `Delete "${title}"? This cannot be undone.`,
-      okText: "Delete",
+          ? t('Delete "{{title}}" from Portal and remove the linked DSpace item ({{id}})? This cannot be undone.', {
+              title,
+              id: record.dspace_item_id
+            })
+          : t('Delete archived submission "{{title}}"? This cannot be undone.', { title })
+        : t('Delete "{{title}}"? This cannot be undone.', { title }),
+      okText: t("Delete"),
       okType: "danger",
-      cancelText: "Cancel",
+      cancelText: t("Cancel"),
       onOk: () => handleDeleteSubmission(record.id)
     });
   };
@@ -2035,12 +2043,12 @@ function App() {
   const handleSubmitDraftFromDetail = async (record) => {
     const ownerId = record.submitter_id || auth.user.id;
     if (!isAdminActor && !isSubmissionSubmitter(record, auth.user.id)) {
-      message.warning("Only the submitter can submit this thesis.");
+      message.warning(t("Only the submitter can submit this thesis."));
       return;
     }
     const caps = getStudentSubmissionCapabilities(record, ownerId, studentSubmissions);
     if (!caps.canSubmit || record.status !== "draft") {
-      message.warning("This thesis cannot be submitted from Detail right now.");
+      message.warning(t("This thesis cannot be submitted from Detail right now."));
       return;
     }
     setIsSubmittingSubmission(true);
@@ -2091,11 +2099,13 @@ function App() {
                       ? record.description
                       : record.extra_metadata?.[field.fieldKey];
         if (!String(fromColumn ?? "").trim()) {
-          throw new Error(`${field.label} is required — edit the draft first`);
+          throw new Error(
+            t("{{label}} is required — edit the draft first", { label: fieldDisplayLabel(field, t) })
+          );
         }
       }
       if (!record.submission_period_id) {
-        throw new Error("Submission period is required — edit the draft first");
+        throw new Error(t("Submission period is required — edit the draft first"));
       }
       if (reviewerIds.length === 0) {
         throw new Error("Please select at least one reviewer — edit the draft first");
@@ -2134,14 +2144,14 @@ function App() {
       if (!response.ok) {
         throw new Error(payload?.message || "Failed to submit thesis");
       }
-      message.success("Thesis submitted successfully");
+      message.success(t("Thesis submitted successfully"));
       setStudentDetailRecord(null);
       if (editingSubmissionId === record.id) {
         resetSubmissionForm();
       }
       await refreshAfterSubmissionWrite();
     } catch (error) {
-      message.error(error.message || "Failed to submit thesis");
+      message.error(tr(error.message || "Failed to submit thesis"))
     } finally {
       setIsSubmittingSubmission(false);
     }
@@ -2161,11 +2171,11 @@ function App() {
       if (!response.ok) {
         throw new Error(payload?.message || "Failed to revert to draft");
       }
-      message.success("Reverted to draft");
+      message.success(t("Reverted to draft"));
       setEditingSubmissionStatus("draft");
       await refreshAfterSubmissionWrite();
     } catch (error) {
-      message.error(error.message || "Failed to revert to draft");
+      message.error(tr(error.message || "Failed to revert to draft"));
     } finally {
       setIsRevertingSubmission(false);
     }
@@ -2193,13 +2203,13 @@ function App() {
         setEditingSubmissionId(payload.id);
         setEditingSubmissionStatus(payload.status || "draft");
       }
-      message.success("Draft saved");
+      message.success(t("Draft saved"));
       await refreshAfterSubmissionWrite();
       if (auth.user.role === "admin") {
         resetSubmissionForm();
       }
     } catch (error) {
-      message.error(error.message || "Failed to save draft");
+      message.error(tr(error.message || "Failed to save draft"));
     } finally {
       setIsSavingDraft(false);
     }
@@ -2250,7 +2260,7 @@ function App() {
           continue;
         }
         if (!String(values[field.fieldKey] ?? "").trim()) {
-          throw new Error(`${field.label} is required`);
+          throw new Error(t("{{label}} is required", { label: fieldDisplayLabel(field, t) }));
         }
       }
       if (!values.submissionPeriodId) {
@@ -2285,13 +2295,13 @@ function App() {
 
       message.success(
         editingSubmissionStatus === "rejected" || editingSubmissionStatus === "reject"
-          ? "Thesis updated and submitted for review"
-          : "Thesis submitted successfully"
+          ? t("Thesis updated and submitted for review")
+          : t("Thesis submitted successfully")
       );
       resetSubmissionForm();
       await refreshAfterSubmissionWrite();
     } catch (error) {
-      message.error(error.message || "Failed to submit thesis");
+      message.error(tr(error.message || "Failed to submit thesis"))
     } finally {
       setIsSubmittingSubmission(false);
     }
@@ -2316,10 +2326,10 @@ function App() {
       if (!response.ok) {
         throw new Error(payload?.message || "Review action failed");
       }
-      message.success(action === "approve" ? "Approved" : "Rejected");
+      message.success(action === "approve" ? t("Approved") : t("Rejected"));
       await loadReviewerQueue();
     } catch (error) {
-      message.error(error.message || "Review action failed");
+      message.error(tr(error.message || "Review action failed"))
     } finally {
       setReviewActionLoadingId(null);
     }
@@ -2346,20 +2356,20 @@ function App() {
       if (!response.ok) {
         throw new Error(payload?.message || "Review action failed");
       }
-      message.success(action === "approve" ? successApproveMsg : "Rejected");
+      message.success(action === "approve" ? successApproveMsg : t("Rejected"));
       await Promise.all([
         loadStaffSubmissions(),
         endpoint === "library-action" ? loadLibraryQueue() : loadDirectorQueue()
       ]);
     } catch (error) {
-      message.error(error.message || "Review action failed");
+      message.error(tr(error.message || "Review action failed"))
     } finally {
       setLoading(null);
     }
   }
 
   const submitLibraryAction = (submissionId, action, comment) =>
-    submitStageAction("library-action", submissionId, action, comment, "Passed library intake");
+    submitStageAction("library-action", submissionId, action, comment, t("Passed library intake"));
 
   const submitDirectorArchive = async (submissionId) => {
     setDirectorActionLoadingId(submissionId);
@@ -2378,35 +2388,39 @@ function App() {
       }
       if (payload?.dspaceDeferred) {
         message.success(
-          payload?.message ||
-            "Submission archived to period. Push to DSpace later from Archive configuration."
+          tr(payload?.message) ||
+            t("Submission archived to period. Push to DSpace later from Archive configuration.")
         );
       } else if (payload?.dspacePublishError) {
         message.warning(
-          payload?.dspacePublishMessage ||
-            "Archived in Portal, but DSpace publish failed — check DSpace settings, collection sync, and logs"
+          tr(payload?.dspacePublishMessage) ||
+            t("Archived in Portal, but DSpace publish failed — check DSpace settings, collection sync, and logs")
         );
       } else if (payload?.dspacePlaceholder) {
         message.warning(
-          `Archived with local placeholder item (${payload.dspaceItemId}). Configure DSpace API to publish for real.`
+          t("Archived with local placeholder item ({{id}}). Configure DSpace API to publish for real.", {
+            id: payload.dspaceItemId
+          })
         );
       } else if (payload?.dspaceItemId) {
         if (payload?.dspacePdfWarning) {
           message.warning(
-            `Archived and created DSpace item (${payload.dspaceItemId}), but thesis PDF was not uploaded`
+            t("Archived and created DSpace item ({{id}}), but thesis PDF was not uploaded", {
+              id: payload.dspaceItemId
+            })
           );
         } else if (payload?.bitstreamUploaded) {
-          message.success(`Archived to DSpace with PDF (${payload.dspaceItemId})`);
+          message.success(t("Archived to DSpace with PDF ({{id}})", { id: payload.dspaceItemId }));
         } else {
-          message.success(`Archived and published to DSpace (${payload.dspaceItemId})`);
+          message.success(t("Archived and published to DSpace ({{id}})", { id: payload.dspaceItemId }));
         }
       } else {
-        message.success("Submission archived");
+        message.success(t("Submission archived"));
       }
       await loadDirectorQueue();
       await loadStaffSubmissions();
     } catch (error) {
-      message.error(error.message || "Archive failed");
+      message.error(tr(error.message || "Archive failed"));
     } finally {
       setDirectorActionLoadingId(null);
     }
@@ -2427,11 +2441,11 @@ function App() {
       if (!response.ok) {
         throw new Error(payload?.message || "Reject failed");
       }
-      message.success("Rejected");
+      message.success(t("Rejected"));
       await loadDirectorQueue();
       await loadStaffSubmissions();
     } catch (error) {
-      message.error(error.message || "Reject failed");
+      message.error(tr(error.message || "Reject failed"));
     } finally {
       setDirectorActionLoadingId(null);
     }
@@ -2448,7 +2462,7 @@ function App() {
       return;
     }
     if (!directorRejectReason.trim()) {
-      message.error("Please enter a reject reason");
+      message.error(t("Please enter a reject reason"));
       return;
     }
     setDirectorRejectModalOpen(false);
@@ -2468,7 +2482,7 @@ function App() {
       return;
     }
     if (!rejectReason.trim()) {
-      message.error("Please enter a reject reason");
+      message.error(t("Please enter a reject reason"));
       return;
     }
     setRejectModalOpen(false);
@@ -2488,7 +2502,7 @@ function App() {
       return;
     }
     if (!libraryRejectReason.trim()) {
-      message.error("Please enter a reject reason");
+      message.error(t("Please enter a reject reason"));
       return;
     }
     setLibraryRejectModalOpen(false);
@@ -2499,28 +2513,28 @@ function App() {
 
   const buildDirectorArchiveColumns = (loadingId, onArchive, onReject) => [
     {
-      title: "Title",
+      title: t("Title"),
       dataIndex: "title",
       key: "title",
       width: 220,
       ellipsis: true
     },
     {
-      title: "Authors",
+      title: t("Authors"),
       dataIndex: "author",
       key: "author",
       width: 200,
       ellipsis: true
     },
     {
-      title: "Status",
+      title: t("Status"),
       dataIndex: "submission_status",
       key: "submission_status",
       width: 110,
-      render: (status) => <Tag color={thesisStatusColor(status)}>{status}</Tag>
+      render: (status) => <Tag color={thesisStatusColor(status)}>{statusText(status, t)}</Tag>
     },
     {
-      title: "Collection / period",
+      title: t("Collection / period"),
       key: "period",
       width: 180,
       ellipsis: true,
@@ -2530,27 +2544,21 @@ function App() {
           : "—"
     },
     {
-      title: "Submitted At",
+      title: t("Submitted At"),
       dataIndex: "created_at",
       key: "created_at",
       width: 170,
-      render: (createdAt) => new Date(createdAt).toLocaleString()
+      render: (createdAt) => formatDateTime(createdAt, lang)
     },
     {
-      title: "Actions",
+      title: t("Actions"),
       key: "actions",
       width: 300,
       render: (_value, record) => (
         <Space>
-          <Button type="link" size="small" onClick={() => openQueueSubmissionDetail(record)}>
-            Detail
-          </Button>
-          <Button type="primary" loading={loadingId === record.id} onClick={() => onArchive(record.id)}>
-            Archive
-          </Button>
-          <Button danger loading={loadingId === record.id} onClick={() => onReject(record.id)}>
-            Reject
-          </Button>
+          <Button type="link" size="small" onClick={() => openQueueSubmissionDetail(record)}>{t("Detail")}</Button>
+          <Button type="primary" loading={loadingId === record.id} onClick={() => onArchive(record.id)}>{t("Archive")}</Button>
+          <Button danger loading={loadingId === record.id} onClick={() => onReject(record.id)}>{t("Reject")}</Button>
         </Space>
       )
     }
@@ -2586,9 +2594,9 @@ function App() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(nextAuth));
       passwordForm.resetFields();
       setPasswordModalOpen(false);
-      message.success("Password updated");
+      message.success(t("Password updated"));
     } catch (error) {
-      message.error(error.message || "Unable to change password");
+      message.error(tr(error.message || "Unable to change password"));
     } finally {
       setChangingPassword(false);
     }
@@ -2614,21 +2622,21 @@ function App() {
     localStorage.removeItem(STORAGE_KEY);
     loginForm.resetFields();
     submissionForm.resetFields();
-    message.info("You have been logged out");
+    message.info(t("You have been logged out"));
   };
 
   const renderWorkflowHistory = (history) => {
     if (!Array.isArray(history) || history.length === 0) {
-      return <Text type="secondary">No workflow history</Text>;
+      return <Text type="secondary">{t("No workflow history")}</Text>;
     }
 
     return (
       <Timeline
         style={{ marginTop: 12 }}
         items={history.map((item, idx) => {
-          const detail = formatEventPayload(item.eventType, item.payload);
-          const role = humanWorkflowRole(item.actorRole);
-          const name = item.actorName || (item.actorRole === "system" ? "System" : "Unknown");
+          const detail = formatEventPayload(item.eventType, item.payload, t);
+          const role = humanWorkflowRole(item.actorRole, t);
+          const name = item.actorName || (item.actorRole === "system" ? t("System") : t("Unknown"));
           return {
             key: `${item.id || idx}-${idx}`,
             color: timelineColor(item.eventType),
@@ -2636,10 +2644,10 @@ function App() {
               <div style={{ paddingBottom: 4 }}>
                 <Space wrap size={8}>
                   <Tag color={eventColor(item.eventType)} style={{ marginInlineEnd: 0 }}>
-                    {eventLabel(item.eventType)}
+                    {eventLabel(item.eventType, t)}
                   </Tag>
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    {item.createdAt ? new Date(item.createdAt).toLocaleString() : ""}
+                    {item.createdAt ? formatDateTime(item.createdAt, lang) : ""}
                   </Text>
                 </Space>
                 <div>
@@ -2664,14 +2672,14 @@ function App() {
     <>
       <Input
         allowClear
-        placeholder="Search by title, author, reviewer list, abstract, submitter..."
+        placeholder={t("Search by title, author, reviewer list, abstract, submitter...")}
         value={search}
         onChange={(event) => onSearch(event.target.value)}
       />
       <Space wrap>
         <Select
           allowClear
-          placeholder="Semester"
+          placeholder={t("Semester")}
           style={{ minWidth: 200 }}
           value={semester}
           options={buildSemesterFilterOptions(items)}
@@ -2691,7 +2699,7 @@ function App() {
         />
         <Select
           allowClear
-          placeholder="Submission period"
+          placeholder={t("Submission period")}
           style={{ minWidth: 260 }}
           value={period}
           options={buildPeriodFilterOptions(items, semester)}
@@ -2720,54 +2728,54 @@ function App() {
     return (
       <Space direction="vertical" size="middle" style={{ width: "100%" }}>
         <Descriptions bordered size="small" column={1}>
-          <Descriptions.Item label="Email">{record.student_email || "—"}</Descriptions.Item>
-          <Descriptions.Item label="Title (Vietnamese)">{record.title_vi || "—"}</Descriptions.Item>
-          <Descriptions.Item label="Title (English)">
+          <Descriptions.Item label={t("Email")}>{record.student_email || "—"}</Descriptions.Item>
+          <Descriptions.Item label={t("Title (Vietnamese)")}>{record.title_vi || "—"}</Descriptions.Item>
+          <Descriptions.Item label={t("Title (English)")}>
             {record.title_en || record.title || "—"}
           </Descriptions.Item>
-          <Descriptions.Item label="Advisor(s)">{record.thesis_advisors || "—"}</Descriptions.Item>
-          <Descriptions.Item label="Major">{record.major || "—"}</Descriptions.Item>
-          <Descriptions.Item label="Year">{record.thesis_year || "—"}</Descriptions.Item>
-          <Descriptions.Item label="Date of Issue">
+          <Descriptions.Item label={t("Advisor(s)")}>{record.thesis_advisors || "—"}</Descriptions.Item>
+          <Descriptions.Item label={t("Major")}>{record.major || "—"}</Descriptions.Item>
+          <Descriptions.Item label={t("Year")}>{record.thesis_year || "—"}</Descriptions.Item>
+          <Descriptions.Item label={t("Date of Issue")}>
             {record.date_issued || record.thesis_year || "—"}
           </Descriptions.Item>
-          <Descriptions.Item label="Publisher">
+          <Descriptions.Item label={t("Publisher")}>
             {record.publisher || record.university_name || "—"}
           </Descriptions.Item>
-          <Descriptions.Item label="Type">{record.document_type || "—"}</Descriptions.Item>
-          <Descriptions.Item label="Language">{record.language || "—"}</Descriptions.Item>
-          <Descriptions.Item label="Submitter account">
+          <Descriptions.Item label={t("Type")}>{documentTypeText(record.document_type, t)}</Descriptions.Item>
+          <Descriptions.Item label={t("Language")}>{languageCodeText(record.language, t)}</Descriptions.Item>
+          <Descriptions.Item label={t("Submitter account")}>
             {record.submitter || "—"}
             {record.submitter_username ? (
               <Text type="secondary"> (@{record.submitter_username})</Text>
             ) : null}
           </Descriptions.Item>
-          <Descriptions.Item label="Submitter user ID">
+          <Descriptions.Item label={t("Submitter user ID")}>
             <Text code copyable>
               {record.submitter_id}
             </Text>
           </Descriptions.Item>
-          <Descriptions.Item label="Workflow status">
-            <Tag color={thesisStatusColor(record.status)}>{record.status}</Tag>
+          <Descriptions.Item label={t("Workflow status")}>
+            <Tag color={thesisStatusColor(record.status)}>{statusText(record.status, t)}</Tag>
           </Descriptions.Item>
-          <Descriptions.Item label="Created at">
-            {new Date(record.created_at).toLocaleString()}
+          <Descriptions.Item label={t("Created at")}>
+            {formatDateTime(record.created_at, lang)}
           </Descriptions.Item>
-          <Descriptions.Item label="Authors (resolved)">{record.author || "—"}</Descriptions.Item>
-          <Descriptions.Item label="Reviewers (resolved)">{record.reviewer || "—"}</Descriptions.Item>
-          <Descriptions.Item label="University">{record.university_name || "—"}</Descriptions.Item>
-          <Descriptions.Item label="Faculty">{record.faculty_name || "—"}</Descriptions.Item>
-          <Descriptions.Item label="Semester">{record.semester_name || "—"}</Descriptions.Item>
-          <Descriptions.Item label="Abstract">{record.abstract || "—"}</Descriptions.Item>
-          <Descriptions.Item label="Description">{record.description || "—"}</Descriptions.Item>
+          <Descriptions.Item label={t("Authors (resolved)")}>{record.author || "—"}</Descriptions.Item>
+          <Descriptions.Item label={t("Reviewers (resolved)")}>{record.reviewer || "—"}</Descriptions.Item>
+          <Descriptions.Item label={t("University")}>{record.university_name || "—"}</Descriptions.Item>
+          <Descriptions.Item label={t("Faculty")}>{record.faculty_name || "—"}</Descriptions.Item>
+          <Descriptions.Item label={t("Semester")}>{record.semester_name || "—"}</Descriptions.Item>
+          <Descriptions.Item label={t("Abstract")}>{record.abstract || "—"}</Descriptions.Item>
+          <Descriptions.Item label={t("Description")}>{record.description || "—"}</Descriptions.Item>
           {extraFields.map((field) => (
-            <Descriptions.Item key={field.id || field.fieldKey} label={field.label}>
+            <Descriptions.Item key={field.id || field.fieldKey} label={fieldDisplayLabel(field, t)}>
               {String(extra[field.fieldKey] ?? record[field.fieldKey] ?? "").trim() || "—"}
             </Descriptions.Item>
           ))}
         </Descriptions>
         <div>
-          <Title level={5}>Files</Title>
+          <Title level={5}>{t("Files")}</Title>
           {Array.isArray(record.files) && record.files.length > 0 ? (
             <ul style={{ margin: 0, paddingLeft: 20 }}>
               {record.files.map((f) => (
@@ -2782,19 +2790,17 @@ function App() {
                       size="small"
                       loading={fileOpenLoadingKey === `${record.id}:${f.id}`}
                       onClick={() => void openProtectedSubmissionFile(record.id, f.id)}
-                    >
-                      Open
-                    </Button>
+                    >{t("Open")}</Button>
                   </Space>
                 </li>
               ))}
             </ul>
           ) : (
-            <Text type="secondary">No files</Text>
+            <Text type="secondary">{t("No files")}</Text>
           )}
         </div>
         <div>
-          <Title level={5}>Workflow History</Title>
+          <Title level={5}>{t("Workflow History")}</Title>
           {renderWorkflowHistory(record.workflow_history)}
         </div>
       </Space>
@@ -2814,22 +2820,18 @@ function App() {
                     <>
                       <Space wrap style={{ width: "100%", justifyContent: "space-between", marginBottom: 12 }}>
                         <Title level={5} style={{ margin: 0 }}>
-                          {studentFocusRecord.status === "draft" ? "Draft details" : "Submission details"}
+                          {studentFocusRecord.status === "draft" ? t("Draft details") : t("Submission details")}
                         </Title>
                         <Space>
                           {focusCaps?.canEdit ? (
-                            <Button type="primary" onClick={() => void loadSubmissionIntoForm(studentFocusRecord)}>
-                              Edit
-                            </Button>
+                            <Button type="primary" onClick={() => void loadSubmissionIntoForm(studentFocusRecord)}>{t("Edit")}</Button>
                           ) : null}
                           {focusCaps?.canDelete ? (
                             <Button
                               danger
                               loading={isDeletingSubmission}
                               onClick={() => promptDeleteSubmission(studentFocusRecord)}
-                            >
-                              Delete
-                            </Button>
+                            >{t("Delete")}</Button>
                           ) : null}
                         </Space>
                       </Space>
@@ -2839,8 +2841,9 @@ function App() {
                     <>
                   {isAdminActor ? (
                     <Paragraph type="secondary">
-                      Create a draft or submit a thesis on behalf of a student. The selected student remains the
-                      submitter.
+                      {t(
+                        "Create a draft or submit a thesis on behalf of a student. The selected student remains the submitter."
+                      )}
                     </Paragraph>
                   ) : null}
                   <Form layout="vertical" form={submissionForm} autoComplete="off">
@@ -2850,46 +2853,46 @@ function App() {
                       </Form.Item>
                     ) : null}
                     <Form.Item
-                      label="Faculty"
+                      label={t("Faculty")}
                       name="archiveFacultyId"
-                      rules={[{ required: true, message: "This student is not assigned to a faculty" }]}
+                      rules={[{ required: true, message: t("This student is not assigned to a faculty") }]}
                     >
                       <Select
-                        placeholder="Student faculty"
+                        placeholder={t("Student faculty")}
                         loading={isLoadingArchiveFaculties}
                         options={facultySelectOptions}
                         disabled
                         notFoundContent={
-                          isLoadingArchiveFaculties ? "Loading..." : "No faculty assigned"
+                          isLoadingArchiveFaculties ? t("Loading...") : t("No faculty assigned")
                         }
                       />
                     </Form.Item>
                     <Form.Item
-                      label="Semester"
+                      label={t("Semester")}
                       name="archiveSemesterId"
-                      rules={[{ required: true, message: "Please select a semester" }]}
+                      rules={[{ required: true, message: t("Please select a semester") }]}
                     >
                       <Select
                         showSearch
                         allowClear
-                        placeholder="Select semester"
+                        placeholder={t("Select semester")}
                         optionFilterProp="label"
                         loading={isLoadingArchiveSemesters}
                         options={archiveSemesters}
                         disabled={!archiveFacultyId || !canChangeSubmissionPeriod}
                         onChange={(value) => void handleArchiveSemesterChange(value)}
-                        notFoundContent={isLoadingArchiveSemesters ? "Loading..." : "Select a faculty first"}
+                        notFoundContent={isLoadingArchiveSemesters ? t("Loading...") : t("Select a faculty first")}
                       />
                     </Form.Item>
                     <Form.Item
-                      label="Submission period"
+                      label={t("Submission period")}
                       name="submissionPeriodId"
-                      rules={[{ required: true, message: "Please select a submission period" }]}
+                      rules={[{ required: true, message: t("Please select a submission period") }]}
                     >
                       <Select
                         showSearch
                         allowClear
-                        placeholder="Select open submission period"
+                        placeholder={t("Select open submission period")}
                         optionFilterProp="label"
                         loading={isLoadingArchivePeriods}
                         disabled={!archiveSemesterId || !canChangeSubmissionPeriod}
@@ -2897,11 +2900,11 @@ function App() {
                         options={archivePeriods.map((p) => ({
                           value: p.id,
                           label: p.closesAt
-                            ? `${p.name} (closes ${new Date(p.closesAt).toLocaleDateString()})`
+                            ? t("{{name}} (closes {{date}})", { name: p.name, date: formatDate(p.closesAt, lang) })
                             : p.name
                         }))}
                         notFoundContent={
-                          isLoadingArchivePeriods ? "Loading..." : "No open periods for this semester"
+                          isLoadingArchivePeriods ? t("Loading...") : t("No open periods for this semester")
                         }
                       />
                     </Form.Item>
@@ -2909,23 +2912,23 @@ function App() {
                     <Divider style={{ margin: "8px 0" }} />
                     {isAdminActor ? (
                     <Form.Item
-                      label="Authors"
+                      label={t("Authors")}
                       name="authorIds"
-                      extra="Search by student name or username. Not filled with the admin account."
-                      rules={[{ required: true, message: "Please search and select at least one student author" }]}
+                      extra={t("Search by student name or username. Not filled with the admin account.")}
+                      rules={[{ required: true, message: t("Please search and select at least one student author") }]}
                     >
                       <Select
                         mode="multiple"
                         showSearch
                         allowClear
                         disabled={isFormReadOnly}
-                        placeholder="Search by name or username"
+                        placeholder={t("Search by name or username")}
                         filterOption={personOptionFilter}
                         loading={isLoadingStudents}
                         options={studentOptions}
                         maxTagCount="responsive"
                         onChange={handleAdminAuthorsChange}
-                        notFoundContent={isLoadingStudents ? "Loading..." : "No students found"}
+                        notFoundContent={isLoadingStudents ? t("Loading...") : t("No students found")}
                       />
                     </Form.Item>
                     ) : null}
@@ -2933,37 +2936,37 @@ function App() {
                       disabled={isFormReadOnly}
                       style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}
                     >
-                    <Form.Item label="Email" name="email">
+                    <Form.Item label={t("Email")} name="email">
                       <Input disabled placeholder="username@hcmut.edu.vn" />
                     </Form.Item>
                     <Form.Item
-                      label="Thesis title (Vietnamese)"
+                      label={t("Thesis title (Vietnamese)")}
                       name="titleVi"
-                      rules={[{ required: true, message: "Vietnamese title is required" }]}
+                      rules={[{ required: true, message: t("Vietnamese title is required") }]}
                     >
-                      <Input placeholder="Tên luận văn / luận án (tiếng Việt)" />
+                      <Input placeholder={t("Tên luận văn / luận án (tiếng Việt)")} />
                     </Form.Item>
                     <Form.Item
-                      label="Thesis title (English)"
+                      label={t("Thesis title (English)")}
                       name="titleEn"
-                      rules={[{ required: true, message: "English title is required" }]}
+                      rules={[{ required: true, message: t("English title is required") }]}
                     >
-                      <Input placeholder="Thesis title in English" />
+                      <Input placeholder={t("Thesis title in English")} />
                     </Form.Item>
                     <Form.Item
-                      label="Advisor(s)"
+                      label={t("Advisor(s)")}
                       name="thesisAdvisors"
-                      rules={[{ required: true, message: "Advisor(s) is required" }]}
+                      rules={[{ required: true, message: t("Advisor(s) is required") }]}
                     >
-                      <Input placeholder="e.g. Assoc. Prof. Nguyen Van A; Dr. Tran Van B" />
+                      <Input placeholder={t("e.g. Assoc. Prof. Nguyen Van A; Dr. Tran Van B")} />
                     </Form.Item>
-                    <Form.Item label="Major" name="major" rules={[{ required: true, message: "Major is required" }]}>
-                      <Input placeholder="e.g. Computer Science" />
+                    <Form.Item label={t("Major")} name="major" rules={[{ required: true, message: t("Major is required") }]}>
+                      <Input placeholder={t("e.g. Computer Science")} />
                     </Form.Item>
-                    <Form.Item label="Year" name="thesisYear" rules={[{ required: true, message: "Year is required" }]}>
+                    <Form.Item label={t("Year")} name="thesisYear" rules={[{ required: true, message: t("Year is required") }]}>
                       <Select
                         options={THESIS_YEAR_OPTIONS}
-                        placeholder="Graduation / submission year"
+                        placeholder={t("Graduation / submission year")}
                         onChange={(year) => {
                           const current = submissionForm.getFieldValue("dateIssued");
                           if (!current || /^\d{4}$/.test(String(current))) {
@@ -2974,43 +2977,44 @@ function App() {
                     </Form.Item>
                     {!isAdminActor ? (
                     <Form.Item
-                      label="Authors"
+                      label={t("Authors")}
                       name="authorIds"
-                      rules={[{ required: true, message: "Please select at least one author" }]}
+                      rules={[{ required: true, message: t("Please select at least one author") }]}
                     >
                       <Select
                         mode="multiple"
                         showSearch
                         allowClear
-                        placeholder="Search by name or username"
+                        placeholder={t("Search by name or username")}
                         filterOption={personOptionFilter}
                         loading={isLoadingStudents}
                         options={studentOptions}
                         maxTagCount="responsive"
-                        notFoundContent={isLoadingStudents ? "Loading..." : "No students found"}
+                        notFoundContent={isLoadingStudents ? t("Loading...") : t("No students found")}
                       />
                     </Form.Item>
                     ) : null}
                     <Form.Item
-                      label="Reviewers"
+                      label={t("Reviewers")}
                       name="reviewerIds"
-                      rules={[{ required: true, message: "Please select at least one reviewer" }]}
+                      rules={[{ required: true, message: t("Please select at least one reviewer") }]}
                     >
                       <Select
                         mode="multiple"
                         showSearch
                         allowClear
-                        placeholder="Search by name or username"
+                        placeholder={t("Search by name or username")}
                         filterOption={personOptionFilter}
                         loading={isLoadingReviewers}
                         options={reviewerOptions}
                         maxTagCount="responsive"
-                        notFoundContent={isLoadingReviewers ? "Loading..." : "No reviewers found"}
+                        notFoundContent={isLoadingReviewers ? t("Loading...") : t("No reviewers found")}
                       />
                     </Form.Item>
                     {configurableFormFields.map((field) => {
+                      const label = fieldDisplayLabel(field, t);
                       const rules = field.required
-                        ? [{ required: true, message: `${field.label} is required` }]
+                        ? [{ required: true, message: t("{{label}} is required", { label }) }]
                         : [];
                       let control;
                       if (field.inputType === "textarea") {
@@ -3023,19 +3027,19 @@ function App() {
                                 ? THESIS_YEAR_OPTIONS
                                 : (field.options || []).map((o) => ({
                                     value: o.value,
-                                    label: o.label
+                                    label: optionDisplayLabel(o, t)
                                   }))
                             }
-                            placeholder={field.label}
+                            placeholder={label}
                           />
                         );
                       } else {
-                        control = <Input placeholder={field.defaultValue || field.label} />;
+                        control = <Input placeholder={field.defaultValue || label} />;
                       }
                       return (
                         <Form.Item
                           key={field.id || field.fieldKey}
-                          label={field.label}
+                          label={label}
                           name={field.fieldKey}
                           rules={rules}
                         >
@@ -3044,25 +3048,25 @@ function App() {
                       );
                     })}
                     <Form.Item
-                      label="Thesis PDF"
+                      label={t("Thesis PDF")}
                       name="thesisFile"
                       valuePropName="fileList"
                       getValueFromEvent={(event) => event?.fileList || []}
                       rules={[
                         {
                           required: !editingSubmissionId,
-                          message: "Please upload thesis PDF"
+                          message: t("Please upload thesis PDF")
                         }
                       ]}
                       extra={
                         editingSubmissionId
-                          ? "Current PDF is shown below. Upload a new file only if you want to replace it."
+                          ? t("Current PDF is shown below. Upload a new file only if you want to replace it.")
                           : undefined
                       }
                     >
                       <Upload.Dragger
                         accept=".pdf,application/pdf"
-                        beforeUpload={(file) => (validateThesisPdf(file) ? false : Upload.LIST_IGNORE)}
+                        beforeUpload={(file) => (validateThesisPdf(file, t) ? false : Upload.LIST_IGNORE)}
                         maxCount={1}
                         onPreview={(file) => {
                           if (file?.existingFileId && editingSubmissionId) {
@@ -3073,7 +3077,7 @@ function App() {
                         <p className="ant-upload-drag-icon">
                           <InboxOutlined />
                         </p>
-                        <p className="ant-upload-text">Click or drag PDF thesis file here (max {THESIS_MAX_FILE_SIZE_MB} MB)</p>
+                        <p className="ant-upload-text">{t("Click or drag PDF thesis file here (max {{size}} MB)", { size: THESIS_MAX_FILE_SIZE_MB })}</p>
                       </Upload.Dragger>
                     </Form.Item>
 
@@ -3086,9 +3090,7 @@ function App() {
                             disabled={
                               (!periodSelected && !editingSubmissionId) || !canSaveCurrentDraft || isFormReadOnly
                             }
-                          >
-                            Save draft
-                          </Button>
+                          >{t("Save draft")}</Button>
                           <Button
                             type="primary"
                             onClick={() => submissionForm.validateFields().then(handleSubmitThesis).catch(() => {})}
@@ -3098,13 +3100,11 @@ function App() {
                             {editingSubmissionStatus === "rejected" ||
                             editingSubmissionStatus === "reject" ||
                             editingSubmissionStatus === "approved"
-                              ? "Submit again"
-                              : "Submit thesis"}
+                              ? t("Submit again")
+                              : t("Submit thesis")}
                           </Button>
                           {editingSubmissionId && editingSubmissionCapabilities.canRevertToDraft ? (
-                            <Button loading={isRevertingSubmission} onClick={() => void handleRevertToDraft()}>
-                              Revert to draft
-                            </Button>
+                            <Button loading={isRevertingSubmission} onClick={() => void handleRevertToDraft()}>{t("Revert to draft")}</Button>
                           ) : null}
                           {editingSubmissionId && editingSubmissionCapabilities.canDelete ? (
                             <Button
@@ -3113,14 +3113,12 @@ function App() {
                               onClick={() =>
                                 editingSubmissionRecord && promptDeleteSubmission(editingSubmissionRecord)
                               }
-                            >
-                              Delete
-                            </Button>
+                            >{t("Delete")}</Button>
                           ) : null}
                         </>
                       ) : null}
                       {editingSubmissionId ? (
-                        <Button onClick={resetSubmissionForm}>{isFormReadOnly ? "Close" : "Cancel edit"}</Button>
+                        <Button onClick={resetSubmissionForm}>{isFormReadOnly ? t("Close") : t("Cancel edit")}</Button>
                       ) : null}
                     </Space>
                     </fieldset>
@@ -3148,39 +3146,33 @@ function App() {
             alt="BK TP.HCM logo"
             style={{ width: 85, height: 85, objectFit: "contain", display: "block" }}
           />
-          <Title level={4} style={{ color: "#fff", margin: 0, lineHeight: "64px" }}>
-            Thesis Deposit Portal
-          </Title>
+          <Title level={4} style={{ color: "#fff", margin: 0, lineHeight: "64px" }}>{t("Thesis Deposit Portal")}</Title>
         </Space>
-        {auth?.user ? (
+        <Space size={12} align="center">
+          <LanguageSwitch />
+          {auth?.user ? (
           <Space size={12} align="center">
             <div style={{ textAlign: "right", lineHeight: 1.25 }}>
               <Text style={{ color: "#ffffff", display: "block", fontWeight: 600 }}>
                 {auth.user.displayName || auth.user.username}
               </Text>
               <Text style={{ color: "#d7e8ff", display: "block", fontSize: 12 }}>@{auth.user.username}</Text>
-              <Text style={{ color: "#d7e8ff", display: "block", fontSize: 12 }}>
-                user_id: {auth.user.id}
-              </Text>
             </div>
             <Button
               onClick={() => {
                 passwordForm.resetFields();
                 setPasswordModalOpen(true);
               }}
-            >
-              Change password
-            </Button>
-            <Button danger onClick={handleLogout}>
-              Log out
-            </Button>
+            >{t("Change password")}</Button>
+            <Button danger onClick={handleLogout}>{t("Log out")}</Button>
           </Space>
-        ) : null}
+          ) : null}
+        </Space>
       </Header>
       <Content style={{ padding: 24 }}>
         {!auth ? (
           <Card
-            title="Login"
+            title={t("Login")}
             style={{ maxWidth: 560, borderColor: "#d6eaff", boxShadow: "0 6px 18px rgba(3, 3, 145, 0.08)" }}
           >
             <Space direction="vertical" style={{ width: "100%" }} size="middle">
@@ -3189,8 +3181,8 @@ function App() {
                   <Alert
                     type="info"
                     showIcon
-                    message="HCMUT Google sign-in"
-                    description="Sign in with your verified @hcmut.edu.vn Google account."
+                    message={t("HCMUT Google sign-in")}
+                    description={t("Sign in with your verified @hcmut.edu.vn Google account.")}
                   />
                   <Button
                     type="primary"
@@ -3200,39 +3192,35 @@ function App() {
                     onClick={() => {
                       window.location.href = "/api/auth/google";
                     }}
-                  >
-                    Login with Google
-                  </Button>
+                  >{t("Login with Google")}</Button>
                 </>
               ) : (
                 <>
                   <Alert
                     type="info"
                     showIcon
-                    message="Demo credentials"
-                    description="student1/student123, reviewer1/review123, library1/library123, director1/director123, admin1/admin123"
+                    message={t("Demo credentials")}
+                    description={t("student1/student123, reviewer1/review123, library1/library123, director1/director123, admin1/admin123")}
                   />
                   <Form form={loginForm} layout="vertical" onFinish={handleLogin} autoComplete="off">
                     <Form.Item
-                      label="Username"
+                      label={t("Username")}
                       name="username"
-                      rules={[{ required: true, message: "Please enter your username" }]}
+                      rules={[{ required: true, message: t("Please enter your username") }]}
                     >
                       <Input placeholder="student1" />
                     </Form.Item>
                     <Form.Item
-                      label="Password"
+                      label={t("Password")}
                       name="password"
                       rules={[
-                        { required: true, message: "Please enter your password" },
-                        { min: 6, message: "Password must be at least 6 characters" }
+                        { required: true, message: t("Please enter your password") },
+                        { min: 6, message: t("Password must be at least 6 characters") }
                       ]}
                     >
                       <Input.Password placeholder="******" />
                     </Form.Item>
-                    <Button type="primary" htmlType="submit" loading={isLoggingIn}>
-                      Login
-                    </Button>
+                    <Button type="primary" htmlType="submit" loading={isLoggingIn}>{t("Login")}</Button>
                   </Form>
                 </>
               )}
@@ -3240,7 +3228,7 @@ function App() {
           </Card>
         ) : (
           <Card
-            title="Dashboard"
+            title={t("Dashboard")}
             style={{
               width: "100%",
               borderColor: "#d6eaff",
@@ -3253,17 +3241,11 @@ function App() {
                 renderThesisEntryWorkspace()
               ) : auth.user.role === "reviewer" ? (
                 <>
-                  <Paragraph type="secondary">
-                    Review all theses where you are assigned as advisor/reviewer. Use search and grouped queues.
-                  </Paragraph>
+                  <Paragraph type="secondary">{t("Review all theses where you are assigned as advisor/reviewer. Use search and grouped queues.")}</Paragraph>
                   <Divider style={{ margin: "8px 0" }} />
                   <Space style={{ width: "100%", justifyContent: "space-between" }}>
-                    <Title level={5} style={{ margin: 0 }}>
-                      Reviewer Workspace
-                    </Title>
-                    <Button onClick={() => loadReviewerQueue()} loading={isLoadingReviewerQueue}>
-                      Refresh
-                    </Button>
+                    <Title level={5} style={{ margin: 0 }}>{t("Reviewer Workspace")}</Title>
+                    <Button onClick={() => loadReviewerQueue()} loading={isLoadingReviewerQueue}>{t("Refresh")}</Button>
                   </Space>
                   {renderSearchArchiveFilters({
                     search: reviewerSearch,
@@ -3275,7 +3257,7 @@ function App() {
                     items: reviewerQueue
                   })}
                   <Title level={5} style={{ margin: "8px 0 0" }}>
-                    Need My Review ({reviewerNeedMyDecision.length})
+                    {t("Need My Review ({{count}})", { count: reviewerNeedMyDecision.length })}
                   </Title>
                   <Table
                     rowKey="id"
@@ -3286,7 +3268,7 @@ function App() {
                     scroll={{ x: 1320 }}
                   />
                   <Title level={5} style={{ margin: "8px 0 0" }}>
-                    I Approved ({reviewerApproved.length})
+                    {t("I Approved ({{count}})", { count: reviewerApproved.length })}
                   </Title>
                   <Table
                     rowKey="id"
@@ -3297,7 +3279,7 @@ function App() {
                     scroll={{ x: 1320 }}
                   />
                   <Title level={5} style={{ margin: "8px 0 0" }}>
-                    I Rejected ({reviewerRejected.length})
+                    {t("I Rejected ({{count}})", { count: reviewerRejected.length })}
                   </Title>
                   <Table
                     rowKey="id"
@@ -3315,35 +3297,30 @@ function App() {
                   items={[
                     {
                       key: "admin",
-                      label: "Administration",
+                      label: t("Administration"),
                       children: <AdminPanel auth={auth} hideArchiveTab hideFormFieldsTab />
                     },
                     {
                       key: "submissions",
-                      label: "Submissions",
+                      label: t("Submissions"),
                       children: (
                         <Tabs
                           items={[
                             {
                               key: "list",
-                              label: "All submissions",
+                              label: t("All submissions"),
                               children: (
                         <>
                           <Paragraph type="secondary">
-                            Open <Text strong>Full detail</Text> to view or delete any submission, including archived
-                            items linked to DSpace.
+                            {t(
+                              "Open Full detail to view or delete any submission, including archived items linked to DSpace."
+                            )}
                           </Paragraph>
                           <Space style={{ width: "100%", justifyContent: "space-between", marginBottom: 8 }}>
-                            <Title level={5} style={{ margin: 0 }}>
-                              All submissions
-                            </Title>
+                            <Title level={5} style={{ margin: 0 }}>{t("All submissions")}</Title>
                             <Space>
-                              <Button type="primary" onClick={openAdminCreateSubmission}>
-                                Create submission
-                              </Button>
-                              <Button onClick={() => void loadStaffSubmissions()} loading={isLoadingSubmissions}>
-                                Refresh
-                              </Button>
+                              <Button type="primary" onClick={openAdminCreateSubmission}>{t("Create submission")}</Button>
+                              <Button onClick={() => void loadStaffSubmissions()} loading={isLoadingSubmissions}>{t("Refresh")}</Button>
                             </Space>
                           </Space>
                           {renderSearchArchiveFilters({
@@ -3364,7 +3341,7 @@ function App() {
                             scroll={{ x: 1400 }}
                           />
                           <Modal
-                            title={editingSubmissionId ? "Edit submission" : "Create submission"}
+                            title={editingSubmissionId ? t("Edit submission") : t("Create submission")}
                             open={adminSubmissionModalOpen}
                             onCancel={resetSubmissionForm}
                             footer={null}
@@ -3378,7 +3355,7 @@ function App() {
                             },
                             {
                               key: "form-fields",
-                              label: "Submission fields",
+                              label: t("Submission fields"),
                               children: <AdminPanel auth={auth} formFieldsOnly />
                             }
                           ]}
@@ -3387,7 +3364,7 @@ function App() {
                     },
                     {
                       key: "archive",
-                      label: "Archive configuration",
+                      label: t("Archive configuration"),
                       children: <LibraryArchivePanel auth={auth} readOnly={false} canManage />
                     }
                   ]}
@@ -3398,12 +3375,12 @@ function App() {
                   items={[
                     {
                       key: "workflow",
-                      label: auth.user.role === "director" ? "Approval workflow" : "Intake & submissions",
+                      label: auth.user.role === "director" ? t("Approval workflow") : t("Intake & submissions"),
                       children: (
                 <>
                   <Paragraph type="secondary">
-                    Workflow: <Tag color="gold">reviewing</Tag> → <Tag color="green">approved</Tag> →{" "}
-                    <Tag color="purple">archived</Tag> or <Tag color="red">rejected</Tag>.
+                    {t("Workflow:")} <Tag color="gold">{t("Reviewing")}</Tag> → <Tag color="green">{t("Approved")}</Tag> →{" "}
+                    <Tag color="purple">{t("Archived")}</Tag> {t("or")} <Tag color="red">{t("Rejected")}</Tag>.
                   </Paragraph>
                   {renderSearchArchiveFilters({
                     search: staffSearch,
@@ -3418,12 +3395,8 @@ function App() {
                     <>
                       <Divider style={{ margin: "8px 0" }} />
                       <Space style={{ width: "100%", justifyContent: "space-between" }}>
-                        <Title level={5} style={{ margin: 0 }}>
-                          Library intake queue
-                        </Title>
-                        <Button onClick={() => loadLibraryQueue()} loading={isLoadingLibraryQueue}>
-                          Refresh
-                        </Button>
+                        <Title level={5} style={{ margin: 0 }}>{t("Library intake queue")}</Title>
+                        <Button onClick={() => loadLibraryQueue()} loading={isLoadingLibraryQueue}>{t("Refresh")}</Button>
                       </Space>
                       <Table
                         rowKey="id"
@@ -3445,17 +3418,14 @@ function App() {
                       <Divider style={{ margin: "8px 0" }} />
                       <Space style={{ width: "100%", justifyContent: "space-between" }}>
                         <div>
-                          <Title level={5} style={{ margin: 0 }}>
-                            Archive approved submissions
-                          </Title>
+                          <Title level={5} style={{ margin: 0 }}>{t("Archive approved submissions")}</Title>
                           <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                            Archive commits in Portal then publishes the thesis item (+ PDF when available)
-                            into the DSpace collection of the submission period (fallback: semester collection).
+                            {t(
+                              "Archive commits in Portal then publishes the thesis item (+ PDF when available) into the DSpace collection of the submission period (fallback: semester collection)."
+                            )}
                           </Paragraph>
                         </div>
-                        <Button onClick={() => loadDirectorQueue()} loading={isLoadingDirectorQueue}>
-                          Refresh
-                        </Button>
+                        <Button onClick={() => loadDirectorQueue()} loading={isLoadingDirectorQueue}>{t("Refresh")}</Button>
                       </Space>
                       <Table
                         rowKey="id"
@@ -3473,9 +3443,7 @@ function App() {
                   )}
                   <Divider style={{ margin: "8px 0" }} />
                   <Space style={{ width: "100%", justifyContent: "space-between" }}>
-                    <Title level={5} style={{ margin: 0 }}>
-                      All submissions
-                    </Title>
+                    <Title level={5} style={{ margin: 0 }}>{t("All submissions")}</Title>
                     <Button
                       onClick={() => {
                         void loadStaffSubmissions();
@@ -3489,9 +3457,7 @@ function App() {
                       loading={
                         isLoadingSubmissions || isLoadingLibraryQueue || isLoadingDirectorQueue
                       }
-                    >
-                      Refresh
-                    </Button>
+                    >{t("Refresh")}</Button>
                   </Space>
                   <Table
                     rowKey="id"
@@ -3506,7 +3472,7 @@ function App() {
                     },
                     {
                       key: "archive",
-                      label: "Archive configuration",
+                      label: t("Archive configuration"),
                       children: (
                         <LibraryArchivePanel
                           auth={auth}
@@ -3518,7 +3484,7 @@ function App() {
                   ]}
                 />
               ) : (
-                <Paragraph type="secondary">Unknown role.</Paragraph>
+                <Paragraph type="secondary">{t("Unknown role.")}</Paragraph>
               )}
             </Space>
           </Card>
@@ -3527,8 +3493,10 @@ function App() {
       <Modal
         title={
           studentDetailRecord
-            ? `Thesis detail: ${studentDetailRecord.title_en || studentDetailRecord.title}`
-            : "Thesis detail"
+            ? t("Thesis detail: {{title}}", {
+                title: studentDetailRecord.title_en || studentDetailRecord.title
+              })
+            : t("Thesis detail")
         }
         open={Boolean(studentDetailRecord)}
         onCancel={() => setStudentDetailRecord(null)}
@@ -3550,9 +3518,7 @@ function App() {
                         setStudentDetailRecord(null);
                         void loadSubmissionIntoForm(record);
                       }}
-                    >
-                      Edit
-                    </Button>
+                    >{t("Edit")}</Button>
                   );
                 }
                 if (caps.canSubmit && studentDetailRecord.status === "draft") {
@@ -3562,9 +3528,7 @@ function App() {
                       type="primary"
                       loading={isSubmittingSubmission}
                       onClick={() => void handleSubmitDraftFromDetail(studentDetailRecord)}
-                    >
-                      Submit
-                    </Button>
+                    >{t("Submit")}</Button>
                   );
                 }
                 if (caps.canDelete) {
@@ -3574,15 +3538,11 @@ function App() {
                       danger
                       loading={isDeletingSubmission}
                       onClick={() => promptDeleteSubmission(studentDetailRecord)}
-                    >
-                      Delete
-                    </Button>
+                    >{t("Delete")}</Button>
                   );
                 }
                 actions.push(
-                  <Button key="close" onClick={() => setStudentDetailRecord(null)}>
-                    Close
-                  </Button>
+                  <Button key="close" onClick={() => setStudentDetailRecord(null)}>{t("Close")}</Button>
                 );
                 return actions;
               })()
@@ -3594,13 +3554,15 @@ function App() {
         {studentDetailRecord ? renderSubmissionDetailBody(studentDetailRecord) : null}
       </Modal>
       <Modal
-        title={reviewerDetailRecord ? `Thesis detail: ${reviewerDetailRecord.title}` : "Thesis detail"}
+        title={
+          reviewerDetailRecord
+            ? t("Thesis detail: {{title}}", { title: reviewerDetailRecord.title })
+            : t("Thesis detail")
+        }
         open={Boolean(reviewerDetailRecord)}
         onCancel={() => setReviewerDetailRecord(null)}
         footer={[
-          <Button key="close" type="primary" onClick={() => setReviewerDetailRecord(null)}>
-            Close
-          </Button>
+          <Button key="close" type="primary" onClick={() => setReviewerDetailRecord(null)}>{t("Close")}</Button>
         ]}
         width={820}
         destroyOnClose
@@ -3608,23 +3570,23 @@ function App() {
         {reviewerDetailRecord ? (
           <Space direction="vertical" size="middle" style={{ width: "100%" }}>
             <Descriptions bordered size="small" column={1}>
-              <Descriptions.Item label="Email">{reviewerDetailRecord.student_email || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Title (Vietnamese)">{reviewerDetailRecord.title_vi || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Title (English)">
+              <Descriptions.Item label={t("Email")}>{reviewerDetailRecord.student_email || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Title (Vietnamese)")}>{reviewerDetailRecord.title_vi || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Title (English)")}>
                 {reviewerDetailRecord.title_en || reviewerDetailRecord.title || "—"}
               </Descriptions.Item>
-              <Descriptions.Item label="Advisor(s)">{reviewerDetailRecord.thesis_advisors || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Major">{reviewerDetailRecord.major || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Year">{reviewerDetailRecord.thesis_year || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Date of Issue">
+              <Descriptions.Item label={t("Advisor(s)")}>{reviewerDetailRecord.thesis_advisors || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Major")}>{reviewerDetailRecord.major || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Year")}>{reviewerDetailRecord.thesis_year || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Date of Issue")}>
                 {reviewerDetailRecord.date_issued || reviewerDetailRecord.thesis_year || "—"}
               </Descriptions.Item>
-              <Descriptions.Item label="Publisher">
+              <Descriptions.Item label={t("Publisher")}>
                 {reviewerDetailRecord.publisher || "—"}
               </Descriptions.Item>
-              <Descriptions.Item label="Type">{reviewerDetailRecord.document_type || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Language">{reviewerDetailRecord.language || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Submitter account">
+              <Descriptions.Item label={t("Type")}>{documentTypeText(reviewerDetailRecord.document_type, t)}</Descriptions.Item>
+              <Descriptions.Item label={t("Language")}>{languageCodeText(reviewerDetailRecord.language, t)}</Descriptions.Item>
+              <Descriptions.Item label={t("Submitter account")}>
                 {reviewerDetailRecord.submitter || "—"}
                 {reviewerDetailRecord.submitter_username ? (
                   <Text type="secondary">
@@ -3633,33 +3595,35 @@ function App() {
                   </Text>
                 ) : null}
               </Descriptions.Item>
-              <Descriptions.Item label="Submitter user ID">
+              <Descriptions.Item label={t("Submitter user ID")}>
                 <Text code copyable>
                   {reviewerDetailRecord.submitter_id}
                 </Text>
               </Descriptions.Item>
-              <Descriptions.Item label="Workflow status">
+              <Descriptions.Item label={t("Workflow status")}>
                 <Tag color={thesisStatusColor(reviewerDetailRecord.submission_status)}>
-                  {reviewerDetailRecord.submission_status}
+                  {statusText(reviewerDetailRecord.submission_status, t)}
                 </Tag>
               </Descriptions.Item>
-              <Descriptions.Item label="Created at">
-                {new Date(reviewerDetailRecord.created_at).toLocaleString()}
+              <Descriptions.Item label={t("Created at")}>
+                {formatDateTime(reviewerDetailRecord.created_at, lang)}
               </Descriptions.Item>
-              <Descriptions.Item label="My decision">
-                <Tag color={reviewDecisionColor(reviewerDetailRecord.my_decision)}>{reviewerDetailRecord.my_decision}</Tag>
+              <Descriptions.Item label={t("My decision")}>
+                <Tag color={reviewDecisionColor(reviewerDetailRecord.my_decision)}>
+                  {decisionText(reviewerDetailRecord.my_decision, t)}
+                </Tag>
               </Descriptions.Item>
-              <Descriptions.Item label="My decided at">
-                {reviewerDetailRecord.my_decided_at ? new Date(reviewerDetailRecord.my_decided_at).toLocaleString() : "—"}
+              <Descriptions.Item label={t("My decided at")}>
+                {reviewerDetailRecord.my_decided_at ? formatDateTime(reviewerDetailRecord.my_decided_at, lang) : "—"}
               </Descriptions.Item>
-              <Descriptions.Item label="My comment">{reviewerDetailRecord.my_comment || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Authors (resolved)">{reviewerDetailRecord.author || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Reviewers (resolved)">{reviewerDetailRecord.reviewer || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Abstract">{reviewerDetailRecord.abstract || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Description">{reviewerDetailRecord.description || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("My comment")}>{reviewerDetailRecord.my_comment || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Authors (resolved)")}>{reviewerDetailRecord.author || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Reviewers (resolved)")}>{reviewerDetailRecord.reviewer || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Abstract")}>{reviewerDetailRecord.abstract || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Description")}>{reviewerDetailRecord.description || "—"}</Descriptions.Item>
             </Descriptions>
             <div>
-              <Title level={5}>Files</Title>
+              <Title level={5}>{t("Files")}</Title>
               {Array.isArray(reviewerDetailRecord.files) && reviewerDetailRecord.files.length > 0 ? (
                 <ul style={{ margin: 0, paddingLeft: 20 }}>
                   {reviewerDetailRecord.files.map((f) => (
@@ -3674,22 +3638,24 @@ function App() {
                           size="small"
                           loading={fileOpenLoadingKey === `${reviewerDetailRecord.id}:${f.id}`}
                           onClick={() => void openProtectedSubmissionFile(reviewerDetailRecord.id, f.id)}
-                        >
-                          Open
-                        </Button>
+                        >{t("Open")}</Button>
                       </Space>
                     </li>
                   ))}
                 </ul>
               ) : (
-                <Text type="secondary">No files</Text>
+                <Text type="secondary">{t("No files")}</Text>
               )}
             </div>
           </Space>
         ) : null}
       </Modal>
       <Modal
-        title={staffDetailRecord ? `Thesis: ${staffDetailRecord.title}` : "Thesis detail"}
+        title={
+          staffDetailRecord
+            ? t("Thesis detail: {{title}}", { title: staffDetailRecord.title })
+            : t("Thesis detail")
+        }
         open={Boolean(staffDetailRecord)}
         onCancel={() => setStaffDetailRecord(null)}
         footer={
@@ -3701,13 +3667,9 @@ function App() {
                   danger
                   loading={isDeletingSubmission}
                   onClick={() => promptStaffDeleteSubmission(staffDetailRecord)}
-                >
-                  Delete
-                </Button>
+                >{t("Delete")}</Button>
               ) : null}
-              <Button type="primary" onClick={() => setStaffDetailRecord(null)}>
-                Close
-              </Button>
+              <Button type="primary" onClick={() => setStaffDetailRecord(null)}>{t("Close")}</Button>
             </Space>
           </Space>
         }
@@ -3717,28 +3679,28 @@ function App() {
         {staffDetailRecord ? (
           <Space direction="vertical" size="middle" style={{ width: "100%" }}>
             <Descriptions bordered size="small" column={1}>
-              <Descriptions.Item label="Submission ID">
+              <Descriptions.Item label={t("Submission ID")}>
                 <Text code copyable>
                   {staffDetailRecord.id}
                 </Text>
               </Descriptions.Item>
-              <Descriptions.Item label="Email">{staffDetailRecord.student_email || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Title (Vietnamese)">{staffDetailRecord.title_vi || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Title (English)">
+              <Descriptions.Item label={t("Email")}>{staffDetailRecord.student_email || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Title (Vietnamese)")}>{staffDetailRecord.title_vi || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Title (English)")}>
                 {staffDetailRecord.title_en || staffDetailRecord.title || "—"}
               </Descriptions.Item>
-              <Descriptions.Item label="Advisor(s)">{staffDetailRecord.thesis_advisors || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Major">{staffDetailRecord.major || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Year">{staffDetailRecord.thesis_year || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Date of Issue">
+              <Descriptions.Item label={t("Advisor(s)")}>{staffDetailRecord.thesis_advisors || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Major")}>{staffDetailRecord.major || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Year")}>{staffDetailRecord.thesis_year || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Date of Issue")}>
                 {staffDetailRecord.date_issued || staffDetailRecord.thesis_year || "—"}
               </Descriptions.Item>
-              <Descriptions.Item label="Publisher">
+              <Descriptions.Item label={t("Publisher")}>
                 {staffDetailRecord.publisher || staffDetailRecord.university_name || "—"}
               </Descriptions.Item>
-              <Descriptions.Item label="Type">{staffDetailRecord.document_type || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Language">{staffDetailRecord.language || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Submitter account">
+              <Descriptions.Item label={t("Type")}>{documentTypeText(staffDetailRecord.document_type, t)}</Descriptions.Item>
+              <Descriptions.Item label={t("Language")}>{languageCodeText(staffDetailRecord.language, t)}</Descriptions.Item>
+              <Descriptions.Item label={t("Submitter account")}>
                 {staffDetailRecord.submitter || "—"}
                 {staffDetailRecord.submitter_username ? (
                   <Text type="secondary">
@@ -3747,19 +3709,19 @@ function App() {
                   </Text>
                 ) : null}
               </Descriptions.Item>
-              <Descriptions.Item label="Submitter user ID">
+              <Descriptions.Item label={t("Submitter user ID")}>
                 <Text code copyable>
                   {staffDetailRecord.submitter_id}
                 </Text>
               </Descriptions.Item>
-              <Descriptions.Item label="Workflow status">
+              <Descriptions.Item label={t("Workflow status")}>
                 <Tag
                   color={thesisStatusColor(staffDetailRecord.status || staffDetailRecord.submission_status)}
                 >
-                  {staffDetailRecord.status || staffDetailRecord.submission_status}
+                  {statusText(staffDetailRecord.status || staffDetailRecord.submission_status, t)}
                 </Tag>
               </Descriptions.Item>
-              <Descriptions.Item label="DSpace item ID">
+              <Descriptions.Item label={t("DSpace item ID")}>
                 {staffDetailRecord.dspace_item_id ? (
                   <Text code copyable>
                     {staffDetailRecord.dspace_item_id}
@@ -3768,24 +3730,24 @@ function App() {
                   "—"
                 )}
               </Descriptions.Item>
-              <Descriptions.Item label="Created at">
-                {new Date(staffDetailRecord.created_at).toLocaleString()}
+              <Descriptions.Item label={t("Created at")}>
+                {formatDateTime(staffDetailRecord.created_at, lang)}
               </Descriptions.Item>
-              <Descriptions.Item label="Authors (resolved)">{staffDetailRecord.author || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Author user IDs">{formatUuidList(staffDetailRecord.author_user_ids)}</Descriptions.Item>
-              <Descriptions.Item label="Author snapshot (stored)">
+              <Descriptions.Item label={t("Authors (resolved)")}>{staffDetailRecord.author || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Author user IDs")}>{formatUuidList(staffDetailRecord.author_user_ids)}</Descriptions.Item>
+              <Descriptions.Item label={t("Author snapshot (stored)")}>
                 {staffDetailRecord.author_snapshot || "—"}
               </Descriptions.Item>
-              <Descriptions.Item label="Reviewers (resolved)">{staffDetailRecord.reviewer || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Reviewer user IDs">{formatUuidList(staffDetailRecord.reviewer_user_ids)}</Descriptions.Item>
-              <Descriptions.Item label="Reviewer snapshot (stored)">
+              <Descriptions.Item label={t("Reviewers (resolved)")}>{staffDetailRecord.reviewer || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Reviewer user IDs")}>{formatUuidList(staffDetailRecord.reviewer_user_ids)}</Descriptions.Item>
+              <Descriptions.Item label={t("Reviewer snapshot (stored)")}>
                 {staffDetailRecord.reviewer_snapshot || "—"}
               </Descriptions.Item>
-              <Descriptions.Item label="Abstract">{staffDetailRecord.abstract || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Description">{staffDetailRecord.description || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Abstract")}>{staffDetailRecord.abstract || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Description")}>{staffDetailRecord.description || "—"}</Descriptions.Item>
             </Descriptions>
             <div>
-              <Title level={5}>Files</Title>
+              <Title level={5}>{t("Files")}</Title>
               {Array.isArray(staffDetailRecord.files) && staffDetailRecord.files.length > 0 ? (
                 <ul style={{ margin: 0, paddingLeft: 20 }}>
                   {staffDetailRecord.files.map((f) => (
@@ -3800,9 +3762,7 @@ function App() {
                           size="small"
                           loading={fileOpenLoadingKey === `${staffDetailRecord.id}:${f.id}`}
                           onClick={() => void openProtectedSubmissionFile(staffDetailRecord.id, f.id)}
-                        >
-                          Open
-                        </Button>
+                        >{t("Open")}</Button>
                       </Space>
                       <div>
                         <Text type="secondary" style={{ fontSize: 12, wordBreak: "break-all" }}>
@@ -3813,11 +3773,11 @@ function App() {
                   ))}
                 </ul>
               ) : (
-                <Text type="secondary">No files</Text>
+                <Text type="secondary">{t("No files")}</Text>
               )}
             </div>
             <div>
-              <Title level={5}>Per-reviewer reviews</Title>
+              <Title level={5}>{t("Per-reviewer reviews")}</Title>
               {Array.isArray(staffDetailRecord.reviews) && staffDetailRecord.reviews.length > 0 ? (
                 <Descriptions bordered size="small" column={1}>
                   {staffDetailRecord.reviews.map((r, idx) => (
@@ -3834,36 +3794,36 @@ function App() {
                     >
                       <Space direction="vertical" size={4} style={{ width: "100%" }}>
                         <Space wrap>
-                          <Text type="secondary">decision</Text>
-                          <Tag color={reviewDecisionColor(r.decision)}>{r.decision}</Tag>
-                          <Text type="secondary">status</Text>
-                          <Tag>{r.status}</Tag>
+                          <Text type="secondary">{t("decision")}</Text>
+                          <Tag color={reviewDecisionColor(r.decision)}>{decisionText(r.decision, t)}</Tag>
+                          <Text type="secondary">{t("status")}</Text>
+                          <Tag>{statusText(r.status, t)}</Tag>
                         </Space>
                         <div>
-                          <Text type="secondary">Comment: </Text>
+                          <Text type="secondary">{t("Comment:")}</Text>
                           {r.comment ? r.comment : "—"}
                         </div>
                         <div>
-                          <Text type="secondary">Decided at: </Text>
-                          {r.decidedAt ? new Date(r.decidedAt).toLocaleString() : "—"}
+                          <Text type="secondary">{t("Decided at:")}</Text>
+                          {r.decidedAt ? formatDateTime(r.decidedAt, lang) : "—"}
                         </div>
                       </Space>
                     </Descriptions.Item>
                   ))}
                 </Descriptions>
               ) : (
-                <Text type="secondary">No review rows</Text>
+                <Text type="secondary">{t("No review rows")}</Text>
               )}
             </div>
             <div>
-              <Title level={5}>Workflow History</Title>
+              <Title level={5}>{t("Workflow History")}</Title>
               {renderWorkflowHistory(staffDetailRecord.workflow_history)}
             </div>
           </Space>
         ) : null}
       </Modal>
       <Modal
-        title="Reject thesis"
+        title={t("Reject thesis")}
         open={rejectModalOpen}
         onOk={confirmReject}
         onCancel={() => {
@@ -3871,14 +3831,14 @@ function App() {
           setRejectTargetId(null);
           setRejectReason("");
         }}
-        okText="Reject"
+        okText={t("Reject")}
         okButtonProps={{ danger: true }}
       >
-        <Paragraph type="secondary">Please provide a clear reason for rejection.</Paragraph>
+        <Paragraph type="secondary">{t("Please provide a clear reason for rejection.")}</Paragraph>
         <TextArea rows={4} value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} />
       </Modal>
       <Modal
-        title="Library intake reject"
+        title={t("Library intake reject")}
         open={libraryRejectModalOpen}
         onOk={confirmLibraryReject}
         onCancel={() => {
@@ -3886,14 +3846,14 @@ function App() {
           setLibraryRejectTargetId(null);
           setLibraryRejectReason("");
         }}
-        okText="Reject"
+        okText={t("Reject")}
         okButtonProps={{ danger: true }}
       >
-        <Paragraph type="secondary">Please provide a clear reason for rejection.</Paragraph>
+        <Paragraph type="secondary">{t("Please provide a clear reason for rejection.")}</Paragraph>
         <TextArea rows={4} value={libraryRejectReason} onChange={(event) => setLibraryRejectReason(event.target.value)} />
       </Modal>
       <Modal
-        title="Director reject"
+        title={t("Director reject")}
         open={directorRejectModalOpen}
         onOk={confirmDirectorReject}
         onCancel={() => {
@@ -3901,10 +3861,10 @@ function App() {
           setDirectorRejectTargetId(null);
           setDirectorRejectReason("");
         }}
-        okText="Reject"
+        okText={t("Reject")}
         okButtonProps={{ danger: true }}
       >
-        <Paragraph type="secondary">Please provide a clear reason for rejection.</Paragraph>
+        <Paragraph type="secondary">{t("Please provide a clear reason for rejection.")}</Paragraph>
         <TextArea
           rows={4}
           value={directorRejectReason}
@@ -3912,7 +3872,7 @@ function App() {
         />
       </Modal>
       <Modal
-        title="Change password"
+        title={t("Change password")}
         open={passwordModalOpen}
         onCancel={() => {
           setPasswordModalOpen(false);
@@ -3923,40 +3883,38 @@ function App() {
       >
         <Form form={passwordForm} layout="vertical" onFinish={handleChangePassword}>
           {auth?.user?.hasPassword === false ? (
-            <Paragraph type="secondary">
-              This account has no password yet. Set one to sign in with your username.
-            </Paragraph>
+            <Paragraph type="secondary">{t("This account has no password yet. Set one to sign in with your username.")}</Paragraph>
           ) : (
             <Form.Item
-              label="Current password"
+              label={t("Current password")}
               name="currentPassword"
-              rules={[{ required: true, message: "Enter your current password" }]}
+              rules={[{ required: true, message: t("Enter your current password") }]}
             >
               <Input.Password />
             </Form.Item>
           )}
           <Form.Item
-            label="New password"
+            label={t("New password")}
             name="newPassword"
             rules={[
-              { required: true, message: "Enter a new password" },
-              { min: 6, message: "Password must be at least 6 characters" }
+              { required: true, message: t("Enter a new password") },
+              { min: 6, message: t("Password must be at least 6 characters") }
             ]}
           >
             <Input.Password />
           </Form.Item>
           <Form.Item
-            label="Confirm new password"
+            label={t("Confirm new password")}
             name="confirmPassword"
             dependencies={["newPassword"]}
             rules={[
-              { required: true, message: "Confirm your new password" },
+              { required: true, message: t("Confirm your new password") },
               ({ getFieldValue }) => ({
                 validator(_, value) {
                   if (!value || getFieldValue("newPassword") === value) {
                     return Promise.resolve();
                   }
-                  return Promise.reject(new Error("Passwords do not match"));
+                  return Promise.reject(new Error(t("Passwords do not match")));
                 }
               })
             ]}
@@ -3969,12 +3927,8 @@ function App() {
                 setPasswordModalOpen(false);
                 passwordForm.resetFields();
               }}
-            >
-              Cancel
-            </Button>
-            <Button type="primary" htmlType="submit" loading={changingPassword}>
-              Update password
-            </Button>
+            >{t("Cancel")}</Button>
+            <Button type="primary" htmlType="submit" loading={changingPassword}>{t("Update password")}</Button>
           </Space>
         </Form>
       </Modal>
