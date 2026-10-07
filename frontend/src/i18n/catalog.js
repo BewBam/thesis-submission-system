@@ -681,11 +681,24 @@ export const catalog = {
   "Sync from DSpace": { en: "Sync from DSpace", vi: "Đồng bộ từ DSpace" },
   "Add faculty": { en: "Add faculty", vi: "Thêm khoa" },
   "DSpace settings": { en: "DSpace settings", vi: "Cài đặt DSpace" },
-  "Set dspace_api_base_url plus dspace_api_user / dspace_api_password for auto-login. Optional dspace_api_token is a fallback when user/password are empty. Root community UUID is used when syncing from DSpace.":
-    {
-      en: "Set dspace_api_base_url plus dspace_api_user / dspace_api_password for auto-login. Optional dspace_api_token is a fallback when user/password are empty. Root community UUID is used when syncing from DSpace.",
-      vi: "Đặt dspace_api_base_url cùng dspace_api_user / dspace_api_password để đăng nhập tự động. dspace_api_token là phương án dự phòng khi không có user/mật khẩu. UUID root community được dùng khi đồng bộ từ DSpace."
-    },
+  "Set dspace_api_base_url, dspace_api_user, and dspace_api_password so the portal can sign in to DSpace.": {
+    en: "Set dspace_api_base_url, dspace_api_user, and dspace_api_password so the portal can sign in to DSpace.",
+    vi: "Đặt dspace_api_base_url, dspace_api_user và dspace_api_password để cổng đăng nhập vào DSpace."
+  },
+  "DSpace REST API base URL e.g. http://host.docker.internal:8080/server": {
+    en: "DSpace REST API base URL e.g. http://host.docker.internal:8080/server",
+    vi: "URL gốc REST của DSpace, ví dụ http://host.docker.internal:8080/server"
+  },
+  "DSpace REST login email/username used for auto-login (preferred over dspace_api_token)": {
+    en: "DSpace REST login email/username used for auto-login (preferred over dspace_api_token)",
+    vi: "Email hoặc tên đăng nhập DSpace dùng để đăng nhập tự động."
+  },
+  "DSpace REST login password for auto-login (prefer env DSPACE_API_PASSWORD in production)": {
+    en: "DSpace REST login password for auto-login (prefer env DSPACE_API_PASSWORD in production)",
+    vi: "Mật khẩu đăng nhập DSpace. Khi chạy thật nên đặt biến DSPACE_API_PASSWORD."
+  },
+  "Export submissions": { en: "Export submissions", vi: "Xuất bài nộp" },
+  "No submissions to export": { en: "No submissions to export", vi: "Không có bài nộp để xuất" },
   "Save DSpace settings": { en: "Save DSpace settings", vi: "Lưu cài đặt DSpace" },
   "Archived submissions stay in Portal periods until you push them": {
     en: "Archived submissions stay in Portal periods until you push them",
@@ -700,7 +713,7 @@ export const catalog = {
   "Filter semester": { en: "Filter semester", vi: "Lọc học kỳ" },
   "Filter period": { en: "Filter period", vi: "Lọc đợt nộp" },
   "DSpace status filter": { en: "DSpace status", vi: "Trạng thái DSpace" },
-  "pending (not published)": { en: "pending (not published)", vi: "đang chờ (chưa lên)" },
+  "Pending (not published)": { en: "Pending (not published)", vi: "Đang chờ (chưa lên)" },
   All: { en: "All", vi: "Tất cả" },
   "Apply filters": { en: "Apply filters", vi: "Áp dụng bộ lọc" },
   "Push selected ({{count}})": { en: "Push selected ({{count}})", vi: "Đẩy đã chọn ({{count}})" },

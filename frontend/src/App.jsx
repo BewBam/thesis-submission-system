@@ -19,7 +19,7 @@ import {
   Upload,
   message
 } from "antd";
-import { InboxOutlined } from "@ant-design/icons";
+import { DownloadOutlined, InboxOutlined } from "@ant-design/icons";
 import AdminPanel from "./AdminPanel.jsx";
 import LibraryArchivePanel from "./LibraryArchivePanel.jsx";
 import { translateApiMessage } from "./i18n/api";
@@ -43,6 +43,27 @@ const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
 
 const THESIS_MAX_FILE_SIZE_MB = 30;
+
+function csvCell(value) {
+  const text = value == null ? "" : String(value);
+  if (/[",\n\r]/.test(text)) {
+    return `"${text.replaceAll('"', '""')}"`;
+  }
+  return text;
+}
+
+function downloadCsv(filename, headers, rows) {
+  const lines = [headers, ...rows].map((row) => row.map(csvCell).join(","));
+  const blob = new Blob([`\uFEFF${lines.join("\r\n")}`], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
 
 function studentEmailFromUser(user) {
   if (!user?.username) {
@@ -735,6 +756,36 @@ function App() {
     () => filterBySearchAndArchive(staffSubmissions, staffSearch, staffSemesterFilter, staffPeriodFilter),
     [staffSubmissions, staffSearch, staffSemesterFilter, staffPeriodFilter]
   );
+
+  const exportAllSubmissions = () => {
+    if (!staffFilteredSubmissions.length) {
+      message.info(t("No submissions to export"));
+      return;
+    }
+    downloadCsv(
+      "submissions.csv",
+      [
+        t("Title"),
+        t("Submitter"),
+        t("Authors"),
+        t("Reviewers"),
+        t("Abstract"),
+        t("DSpace"),
+        t("Status"),
+        t("Submitted At")
+      ],
+      staffFilteredSubmissions.map((record) => [
+        record.title || "",
+        [record.submitter, record.submitter_username ? `(${record.submitter_username})` : ""].filter(Boolean).join(" "),
+        record.author || "",
+        record.reviewer || "",
+        record.abstract || "",
+        record.dspace_item_id || "",
+        statusText(record.status, t),
+        formatDateTime(record.created_at, lang)
+      ])
+    );
+  };
 
   const libraryFilteredQueue = useMemo(
     () => filterBySearchAndArchive(libraryQueue, staffSearch, staffSemesterFilter, staffPeriodFilter),
@@ -3314,6 +3365,7 @@ function App() {
                             <Title level={5} style={{ margin: 0 }}>{t("All submissions")}</Title>
                             <Space>
                               <Button type="primary" onClick={openAdminCreateSubmission}>{t("Create submission")}</Button>
+                              <Button icon={<DownloadOutlined />} onClick={exportAllSubmissions}>{t("Export submissions")}</Button>
                               <Button onClick={() => void loadStaffSubmissions()} loading={isLoadingSubmissions}>{t("Refresh")}</Button>
                             </Space>
                           </Space>
@@ -3442,20 +3494,23 @@ function App() {
                   <Divider style={{ margin: "8px 0" }} />
                   <Space style={{ width: "100%", justifyContent: "space-between" }}>
                     <Title level={5} style={{ margin: 0 }}>{t("All submissions")}</Title>
-                    <Button
-                      onClick={() => {
-                        void loadStaffSubmissions();
-                        if (auth.user.role === "library_staff") {
-                          void loadLibraryQueue();
+                    <Space>
+                      <Button icon={<DownloadOutlined />} onClick={exportAllSubmissions}>{t("Export submissions")}</Button>
+                      <Button
+                        onClick={() => {
+                          void loadStaffSubmissions();
+                          if (auth.user.role === "library_staff") {
+                            void loadLibraryQueue();
+                          }
+                          if (auth.user.role === "director") {
+                            void loadDirectorQueue();
+                          }
+                        }}
+                        loading={
+                          isLoadingSubmissions || isLoadingLibraryQueue || isLoadingDirectorQueue
                         }
-                        if (auth.user.role === "director") {
-                          void loadDirectorQueue();
-                        }
-                      }}
-                      loading={
-                        isLoadingSubmissions || isLoadingLibraryQueue || isLoadingDirectorQueue
-                      }
-                    >{t("Refresh")}</Button>
+                      >{t("Refresh")}</Button>
+                    </Space>
                   </Space>
                   <Table
                     rowKey="id"

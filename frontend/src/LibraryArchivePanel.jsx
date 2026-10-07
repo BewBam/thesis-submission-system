@@ -59,13 +59,9 @@ async function parseResponse(response) {
   }
 }
 
-const DSPACE_SETTING_ORDER = [
-  "dspace_api_base_url",
-  "dspace_api_user",
-  "dspace_api_password",
-  "dspace_api_token",
-  "dspace_root_community_id"
-];
+const DSPACE_SETTING_ORDER = ["dspace_api_base_url", "dspace_api_user", "dspace_api_password"];
+
+const HIDDEN_DSPACE_SETTINGS = new Set(["dspace_api_token", "dspace_root_community_id"]);
 
 function isDspaceSettingKey(key) {
   return String(key || "").startsWith("dspace_");
@@ -77,7 +73,7 @@ function sortDspaceSettings(items) {
 }
 
 function renderDspaceSettingControl(item, t) {
-  if (item.key === "dspace_api_password" || item.key === "dspace_api_token") {
+  if (item.key === "dspace_api_password") {
     return <Input.Password placeholder={item.sensitive ? t("Unchanged if left blank / masked") : ""} />;
   }
   return <Input />;
@@ -378,7 +374,9 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
       if (!response.ok || !Array.isArray(payload)) {
         throw new Error(payload?.message || "Unable to load DSpace settings");
       }
-      const dspaceItems = sortDspaceSettings(payload.filter((item) => isDspaceSettingKey(item.key)));
+      const dspaceItems = sortDspaceSettings(
+        payload.filter((item) => isDspaceSettingKey(item.key) && !HIDDEN_DSPACE_SETTINGS.has(item.key))
+      );
       setDspaceSettings(dspaceItems);
       const values = {};
       for (const item of dspaceItems) {
@@ -1198,10 +1196,9 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                   children: (
                     <Space direction="vertical" size="middle" style={{ width: "100%", maxWidth: 640 }}>
                       <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                        Set <Text code>dspace_api_base_url</Text> plus{" "}
-                        <Text code>dspace_api_user</Text> / <Text code>dspace_api_password</Text> for
-                        auto-login. Optional <Text code>dspace_api_token</Text> is a fallback when
-                        user/password are empty. Root community UUID is used when syncing from DSpace.
+                        {t(
+                          "Set dspace_api_base_url, dspace_api_user, and dspace_api_password so the portal can sign in to DSpace."
+                        )}
                       </Paragraph>
                       <Form
                         form={dspaceSettingsForm}
@@ -1213,7 +1210,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                             key={item.key}
                             name={item.key}
                             label={item.key}
-                            extra={item.description}
+                            extra={item.description ? t(item.description) : undefined}
                           >
                             {renderDspaceSettingControl(item, t)}
                           </Form.Item>
@@ -1291,7 +1288,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                           style={{ minWidth: 160 }}
                           value={publishFilterStatus}
                           options={[
-                            { value: "pending", label: t("pending (not published)") },
+                            { value: "pending", label: t("Pending (not published)") },
                             { value: "published", label: t("Published") },
                             { value: "failed", label: t("Failed") },
                             { value: "", label: t("All") }
