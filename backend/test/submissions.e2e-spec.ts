@@ -157,17 +157,22 @@ describe("Submission, PDF, and resubmit", () => {
     expect(errorText(response.body).toLowerCase()).toContain("pdf");
   });
 
-  it("TC-PDF-004 rejects a PDF larger than 30 MB", async () => {
+  it("TC-PDF-004 rejects a PDF larger than the configured limit", async () => {
     const student = await freshStudent();
+    const limit = await http().get("/submissions/upload-limit").set("Authorization", `Bearer ${student.token}`);
+    expect(limit.status).toBe(200);
+    const maxMb = Number(limit.body.maxFileSizeMb);
+    expect(maxMb).toBeGreaterThan(0);
     const response = await submitThesis(student.token, periodId, student.id, [REVIEWER1.id], {
       file: {
-        buffer: Buffer.alloc(30 * 1024 * 1024 + 1, 1),
+        buffer: Buffer.alloc(maxMb * 1024 * 1024 + 1, 1),
         filename: "too-large.pdf",
         contentType: "application/pdf"
       }
     });
     expect(response.status).toBeGreaterThanOrEqual(400);
     expect(response.status).toBeLessThan(500);
+    expect(errorText(response.body)).toContain(`${maxMb} MB`);
   });
 
   it("TC-PDF-005 accepts a PDF filename with spaces and unicode", async () => {

@@ -83,7 +83,6 @@ export class ReviewsService {
        LEFT JOIN submission_files sf ON sf.submission_id = s.id
        WHERE r.reviewer_id = $1
          AND s.status = 'reviewing'
-         AND ${this.workflow.currentStepSql("reviewer")}
          AND ${this.groups.reviewerCanSeeStudentSql("$1")}
        GROUP BY s.id,
                 s.title,

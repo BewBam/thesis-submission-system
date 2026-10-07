@@ -74,6 +74,8 @@ describe("Approve and reject", () => {
     const row = await rowOf(student, id);
     expect(row.status).toBe("reviewing");
     expect(row.reviews[0].decision).toBe("approved");
+    const mine = await http().get("/reviews/my-queue").set("Authorization", `Bearer ${reviewerToken}`);
+    expect(mine.body.some((item: { id: string; my_decision: string }) => item.id === id && item.my_decision === "approved")).toBe(true);
     const queue = await http().get("/reviews/library-queue").set("Authorization", `Bearer ${libraryToken}`);
     expect(queue.body.some((item: { id: string }) => item.id === id)).toBe(true);
   });
@@ -135,17 +137,32 @@ describe("Approve and reject", () => {
   });
 
   it("TC-REV-007 blocks a second decision", async () => {
-    const { id } = await freshSubmission();
+    const moved = await freshSubmission();
     await http()
       .post("/reviews/action")
       .set("Authorization", `Bearer ${reviewerToken}`)
-      .send({ submissionId: id, action: "approve" });
+      .send({ submissionId: moved.id, action: "approve" });
+    const afterStepMoved = await http()
+      .post("/reviews/action")
+      .set("Authorization", `Bearer ${reviewerToken}`)
+      .send({ submissionId: moved.id, action: "reject", comment: "Changed my mind" });
+    expect(afterStepMoved.status).toBe(400);
+    expect(errorText(afterStepMoved.body)).toContain("not waiting for this step");
+    expect((await rowOf(moved.student, moved.id)).reviews[0].decision).toBe("approved");
+
+    const second = await createUser("reviewer");
+    const pending = await freshSubmission([REVIEWER1.id, second.id]);
+    await http()
+      .post("/reviews/action")
+      .set("Authorization", `Bearer ${reviewerToken}`)
+      .send({ submissionId: pending.id, action: "approve" });
     const again = await http()
       .post("/reviews/action")
       .set("Authorization", `Bearer ${reviewerToken}`)
-      .send({ submissionId: id, action: "reject", comment: "Changed my mind" });
+      .send({ submissionId: pending.id, action: "reject", comment: "Changed my mind" });
     expect(again.status).toBe(400);
     expect(errorText(again.body)).toContain("already completed");
+    expect((await rowOf(pending.student, pending.id)).status).toBe("reviewing");
   });
 
   it("TC-REV-008 forbids students and library staff from reviewer actions", async () => {
@@ -210,7 +227,7 @@ describe("Approve and reject", () => {
 
   it("TC-LIB-004 refuses intake while a reviewer is still pending", async () => {
     const second = await createUser("reviewer");
-    const { id } = await freshSubmission([REVIEWER1.id, second.id]);
+    const { student, id } = await freshSubmission([REVIEWER1.id, second.id]);
     await http()
       .post("/reviews/action")
       .set("Authorization", `Bearer ${reviewerToken}`)
@@ -220,7 +237,8 @@ describe("Approve and reject", () => {
       .set("Authorization", `Bearer ${libraryToken}`)
       .send({ submissionId: id, action: "approve" });
     expect(response.status).toBe(400);
-    expect(errorText(response.body)).toContain("not ready for library intake");
+    expect(errorText(response.body)).toContain("not waiting for this step");
+    expect((await rowOf(student, id)).status).toBe("reviewing");
   });
 
   it("TC-LIB-005 refuses archive from library staff", async () => {
@@ -271,14 +289,15 @@ describe("Approve and reject", () => {
     expect((await rowOf(student, id)).status).toBe("rejected");
   });
 
-  it("TC-DIR-003 refuses archive unless the thesis is approved", async () => {
-    const { id } = await freshSubmission();
+  it("TC-DIR-003 refuses archive unless the thesis is at the director step", async () => {
+    const { student, id } = await freshSubmission();
     const response = await http()
       .post("/reviews/director-action")
       .set("Authorization", `Bearer ${directorToken}`)
       .send({ submissionId: id, action: "archive" });
     expect(response.status).toBe(400);
-    expect(errorText(response.body)).toContain("Only approved submissions");
+    expect(errorText(response.body)).toContain("not waiting for this step");
+    expect((await rowOf(student, id)).status).toBe("reviewing");
   });
 
   it("TC-DIR-004 forbids reviewer and library staff from director actions", async () => {
