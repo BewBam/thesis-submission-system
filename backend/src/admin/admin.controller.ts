@@ -33,6 +33,10 @@ import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateRolePermissionsDto } from "./dto/update-role-permissions.dto";
 import { UpdateSettingsDto } from "./dto/update-settings.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
+import { CreateGroupDto, SetGroupGrantsDto, SetGroupMembersDto } from "../workflow/dto/group.dto";
+import { SaveWorkflowDto } from "../workflow/dto/save-workflow.dto";
+import { GroupsService } from "../workflow/groups.service";
+import { WorkflowService } from "../workflow/workflow.service";
 
 @Controller("admin")
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -41,7 +45,9 @@ export class AdminController {
     private readonly adminUsersService: AdminUsersService,
     private readonly adminRolesService: AdminRolesService,
     private readonly adminSettingsService: AdminSettingsService,
-    private readonly formFieldsService: SubmissionFormFieldsService
+    private readonly formFieldsService: SubmissionFormFieldsService,
+    private readonly workflowService: WorkflowService,
+    private readonly groupsService: GroupsService
   ) {}
 
   @Get("users")
@@ -166,5 +172,47 @@ export class AdminController {
   @RequirePermissions("configure_system")
   deleteFormField(@Param("fieldId") fieldId: string) {
     return this.formFieldsService.remove(fieldId);
+  }
+
+  @Get("workflow")
+  @RequirePermissions("configure_system")
+  listWorkflow() {
+    return this.workflowService.listTemplate();
+  }
+
+  @Put("workflow")
+  @RequirePermissions("configure_system")
+  saveWorkflow(@Body() body: SaveWorkflowDto) {
+    return this.workflowService.saveTemplate(body.steps);
+  }
+
+  @Get("groups")
+  @RequirePermissions("configure_system")
+  listGroups() {
+    return this.groupsService.list();
+  }
+
+  @Post("groups")
+  @RequirePermissions("configure_system")
+  createGroup(@Body() body: CreateGroupDto) {
+    return this.groupsService.create(body.name, body.kind);
+  }
+
+  @Delete("groups/:groupId")
+  @RequirePermissions("configure_system")
+  deleteGroup(@Param("groupId") groupId: string) {
+    return this.groupsService.remove(groupId);
+  }
+
+  @Put("groups/:groupId/members")
+  @RequirePermissions("configure_system")
+  setGroupMembers(@Param("groupId") groupId: string, @Body() body: SetGroupMembersDto) {
+    return this.groupsService.setMembers(groupId, body.userIds);
+  }
+
+  @Put("groups/:groupId/grants")
+  @RequirePermissions("configure_system")
+  setGroupGrants(@Param("groupId") groupId: string, @Body() body: SetGroupGrantsDto) {
+    return this.groupsService.setGrants(groupId, body.studentGroupIds);
   }
 }

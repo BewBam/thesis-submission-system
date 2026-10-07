@@ -24,9 +24,12 @@ import { SaveDraftDto } from "./dto/save-draft.dto";
 import {
   mergeThesisMetadata,
   normalizeThesisMetadata,
-  THESIS_METADATA_SELECT
+  THESIS_METADATA_SELECT,
+  type NormalizedThesisMetadata
 } from "./submission-metadata";
 import { SubmissionFormFieldsService } from "./submission-form-fields.service";
+import { GroupsService } from "../workflow/groups.service";
+import { WorkflowService } from "../workflow/workflow.service";
 import { THESIS_MAX_FILE_SIZE_MB, isThesisPdfUpload } from "./submission-limits";
 import {
   assertStudentSubmissionCapability,
@@ -54,7 +57,9 @@ export class SubmissionsService {
     private readonly submissionPeriodsService: SubmissionPeriodsService,
     private readonly dspaceProvisioner: DspaceProvisionerService,
     private readonly formFieldsService: SubmissionFormFieldsService,
-    private readonly workflowMail: WorkflowMailService
+    private readonly workflowMail: WorkflowMailService,
+    private readonly workflow: WorkflowService,
+    private readonly groups: GroupsService
   ) {}
 
   private isAdminActor(actor: JwtPayload): boolean {
@@ -334,16 +339,21 @@ export class SubmissionsService {
       );
     }
 
-    if (!thesisFile) {
+    const pdfNative = await this.usesNative("thesisFile", "file");
+    const pdfRequired = pdfNative && (await this.fieldMust("thesisFile", true));
+    if (pdfRequired && !thesisFile) {
       throw new BadRequestException("Thesis PDF is required");
     }
-    await this.assertThesisFileValid(thesisFile);
+    if (thesisFile) {
+      await this.assertThesisFileValid(thesisFile);
+    }
 
     const student = await this.usersService.findById(dto.studentId);
     if (!student || student.role !== "student") {
       throw new BadRequestException("Invalid student account");
     }
-    const meta = normalizeThesisMetadata(dto, student.username, { required: true });
+    const meta = normalizeThesisMetadata(dto, student.username, { required: false });
+    await this.assertConfiguredMetadata(meta);
     const formValues = await this.resolveConfigurableFields(
       { ...(dto.metadata || {}), ...dto, abstract: dto.abstract },
       { required: true }
@@ -356,9 +366,23 @@ export class SubmissionsService {
     const abstractText = formValues.columns.abstract ?? dto.abstract ?? "";
     const extraMetadata = formValues.extra;
 
-    const uniqueAuthorIds = Array.from(new Set(dto.authorIds));
-    if (uniqueAuthorIds.length === 0) {
+    const authorsEnabled = await this.fieldActive("authorIds", true);
+    const authorsNative = await this.usesNative("authorIds", "select");
+    const uniqueAuthorIds = authorsEnabled && authorsNative ? Array.from(new Set(dto.authorIds ?? [])) : [];
+    if (authorsNative && (await this.fieldMust("authorIds", true)) && uniqueAuthorIds.length === 0) {
       throw new BadRequestException("At least one author is required");
+    }
+    if (!authorsNative && authorsEnabled) {
+      const authorText = (dto.authorIds ?? []).join(", ").trim();
+      if ((await this.fieldMust("authorIds", true)) && !authorText) {
+        throw new BadRequestException("At least one author is required");
+      }
+      if (authorText) {
+        extraMetadata.authorIds = authorText;
+      }
+    }
+    if (!uniqueAuthorIds.includes(dto.studentId)) {
+      uniqueAuthorIds.unshift(dto.studentId);
     }
 
     const authorUsers = [];
@@ -376,10 +400,22 @@ export class SubmissionsService {
 
     const authorSnapshot = authorUsers.map((user) => user.displayName || user.username).join("; ");
 
-    const uniqueReviewerIds = Array.from(new Set(dto.reviewerIds));
-    if (uniqueReviewerIds.length === 0) {
+    const reviewersEnabled = await this.fieldActive("reviewerIds", true);
+    const reviewersNative = await this.usesNative("reviewerIds", "select");
+    const uniqueReviewerIds =
+      reviewersEnabled && reviewersNative ? Array.from(new Set(dto.reviewerIds ?? [])) : [];
+    if (!reviewersNative && reviewersEnabled) {
+      const reviewerText = (dto.reviewerIds ?? []).join(", ").trim();
+      if ((await this.fieldMust("reviewerIds", true)) && !reviewerText) {
+        throw new BadRequestException("At least one reviewer is required");
+      }
+      if (reviewerText) {
+        extraMetadata.reviewerIds = reviewerText;
+      }
+    } else if ((await this.fieldMust("reviewerIds", true)) && uniqueReviewerIds.length === 0) {
       throw new BadRequestException("At least one reviewer is required");
     }
+    await this.groups.assertReviewersAllowed(dto.studentId, uniqueReviewerIds);
 
     const reviewerUsers = [];
     for (const reviewerId of uniqueReviewerIds) {
@@ -392,23 +428,49 @@ export class SubmissionsService {
 
     const reviewerSnapshot = reviewerUsers.map((user) => user.displayName || user.username).join("; ");
 
-    const period = await this.submissionPeriodsService.resolveOpenPeriod(dto.submissionPeriodId);
-    this.assertPeriodMatchesStudentFaculty(student, period.facultyId);
+    const periodEnabled = await this.fieldActive("submissionPeriodId", true);
+    const periodNative = await this.usesNative("submissionPeriodId", "select");
+    if ((await this.fieldMust("submissionPeriodId", true)) && !dto.submissionPeriodId?.trim()) {
+      throw new BadRequestException("Submission period is required");
+    }
+    let period: {
+      periodId: string | null;
+      universityName: string;
+      facultyName: string;
+      semesterName: string;
+      facultyId: string;
+    } = {
+      periodId: null,
+      universityName: "",
+      facultyName: "",
+      semesterName: "",
+      facultyId: student.facultyId || ""
+    };
+    if (periodEnabled && periodNative && dto.submissionPeriodId) {
+      const resolved = await this.submissionPeriodsService.resolveOpenPeriod(dto.submissionPeriodId);
+      this.assertPeriodMatchesStudentFaculty(student, resolved.facultyId);
+      period = resolved;
+    } else if (periodEnabled && !periodNative && dto.submissionPeriodId?.trim()) {
+      extraMetadata.submissionPeriodId = dto.submissionPeriodId.trim();
+    }
 
     const submissionId = randomUUID();
     const targetDirectory = path.join(uploadsRoot, submissionId);
     await mkdir(targetDirectory, { recursive: true });
 
     const savedFiles = [];
-    const thesisFilePath = await this.moveUploadedFile(thesisFile, targetDirectory);
-    savedFiles.push({
-      id: randomUUID(),
-      submission_id: submissionId,
-      file_name: thesisFile.originalname,
-      file_url: thesisFilePath,
-      file_type: "thesis"
-    });
+    if (thesisFile) {
+      const thesisFilePath = await this.moveUploadedFile(thesisFile, targetDirectory);
+      savedFiles.push({
+        id: randomUUID(),
+        submission_id: submissionId,
+        file_name: thesisFile.originalname,
+        file_url: thesisFilePath,
+        file_type: "thesis"
+      });
+    }
 
+    let placed: { status: string; role: string } = { status: "reviewing", role: "reviewer" };
     try {
       const client = await this.db.connect();
       try {
@@ -502,6 +564,7 @@ export class SubmissionsService {
             [file.id, file.submission_id, file.file_name, file.file_url, file.file_type]
           );
         }
+        placed = await this.workflow.snapshot(client, submissionId);
         await client.query("COMMIT");
       } catch (error) {
         await client.query("ROLLBACK");
@@ -524,16 +587,18 @@ export class SubmissionsService {
       );
     }
 
-    this.workflowMail.notifySafely("reviewer_assigned", () =>
-      this.workflowMail.notifyReviewersOnSubmit(submissionId)
-    );
+    if (placed.role === "reviewer") {
+      this.workflowMail.notifySafely("reviewer_assigned", () =>
+        this.workflowMail.notifyReviewersOnSubmit(submissionId)
+      );
+    }
     this.workflowMail.notifySafely("student_submitted", () =>
       this.workflowMail.notifyStudentOnSubmitted(submissionId, false)
     );
 
     return {
       id: submissionId,
-      status: "reviewing"
+      status: placed.status
     };
   }
 
@@ -909,6 +974,7 @@ export class SubmissionsService {
     }
 
     let resubmit = false;
+    let placed: { status: string; role: string } = { status: "reviewing", role: "reviewer" };
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
@@ -981,8 +1047,9 @@ export class SubmissionsService {
           language: row.language,
           description: row.description
         },
-        { required: true }
+        { required: false }
       );
+      await this.assertConfiguredMetadata(meta);
       const formValues = await this.resolveConfigurableFields(
         {
           ...(dto.metadata || {}),
@@ -1004,13 +1071,44 @@ export class SubmissionsService {
       const abstract = formValues.columns.abstract ?? (dto.abstract?.trim() || row.abstract);
       const extraMetadata = formValues.extra;
 
-      const periodId = dto.submissionPeriodId ?? row.submission_period_id;
-      if (!periodId) {
+      const periodEnabled = await this.fieldActive("submissionPeriodId", true);
+      const periodNative = await this.usesNative("submissionPeriodId", "select");
+      const periodId = periodEnabled && periodNative ? dto.submissionPeriodId ?? row.submission_period_id : null;
+      if (periodNative && (await this.fieldMust("submissionPeriodId", true)) && !periodId) {
         throw new BadRequestException("Submission period is required");
       }
+      if (!periodNative && periodEnabled) {
+        const periodText = (dto.submissionPeriodId || "").trim();
+        if ((await this.fieldMust("submissionPeriodId", true)) && !periodText) {
+          throw new BadRequestException("Submission period is required");
+        }
+        if (periodText) {
+          extraMetadata.submissionPeriodId = periodText;
+        }
+      }
 
-      let periodContext;
-      if (row.status === "draft") {
+      let periodContext: {
+        periodId: string | null;
+        facultyId: string;
+        facultyName: string;
+        semesterName: string;
+        universityName: string;
+        periodName?: string;
+        facultyCode?: string;
+        semesterId?: string;
+        semesterCode?: string;
+        universityId?: string;
+        allowResubmit?: boolean;
+      } = {
+        periodId: periodId || null,
+        facultyId: student.facultyId || "",
+        facultyName: "",
+        semesterName: "",
+        universityName: ""
+      };
+      if (!periodId) {
+        // Period field is off or empty and not required.
+      } else if (row.status === "draft") {
         periodContext = await this.submissionPeriodsService.resolveOpenPeriod(periodId);
       } else if (
         row.status === "rejected" ||
@@ -1052,14 +1150,50 @@ export class SubmissionsService {
       } else {
         throw new BadRequestException("This thesis cannot be submitted in its current state");
       }
-      this.assertPeriodMatchesStudentFaculty(student, periodContext.facultyId);
+      if (periodId) {
+        this.assertPeriodMatchesStudentFaculty(student, periodContext.facultyId);
+      }
 
-      const { authorIds, authorSnapshot, reviewerIds, reviewerSnapshot } = await this.resolveAuthorsAndReviewers(
+      const authorsEnabled = await this.fieldActive("authorIds", true);
+      const authorsNative = await this.usesNative("authorIds", "select");
+      const reviewersEnabled = await this.fieldActive("reviewerIds", true);
+      const reviewersNative = await this.usesNative("reviewerIds", "select");
+      if (authorsEnabled && authorsNative && (await this.fieldMust("authorIds", true)) && !(dto.authorIds && dto.authorIds.length > 0)) {
+        throw new BadRequestException("At least one author is required");
+      }
+      if (authorsEnabled && !authorsNative) {
+        const authorText = (dto.authorIds ?? []).join(", ").trim();
+        if ((await this.fieldMust("authorIds", true)) && !authorText) {
+          throw new BadRequestException("At least one author is required");
+        }
+        if (authorText) {
+          extraMetadata.authorIds = authorText;
+        }
+      }
+      if (reviewersEnabled && !reviewersNative) {
+        const reviewerText = (dto.reviewerIds ?? []).join(", ").trim();
+        if ((await this.fieldMust("reviewerIds", true)) && !reviewerText) {
+          throw new BadRequestException("At least one reviewer is required");
+        }
+        if (reviewerText) {
+          extraMetadata.reviewerIds = reviewerText;
+        }
+      }
+      const resolvedPeople = await this.resolveAuthorsAndReviewers(
         row.student_id,
-        dto.authorIds,
-        dto.reviewerIds,
-        { reviewersRequired: true }
+        authorsEnabled && authorsNative ? dto.authorIds : [row.student_id],
+        reviewersEnabled && reviewersNative ? dto.reviewerIds : [],
+        { reviewersRequired: reviewersEnabled && reviewersNative && (await this.fieldMust("reviewerIds", true)) }
       );
+      const authorIds = resolvedPeople.authorIds;
+      const authorSnapshot = resolvedPeople.authorSnapshot;
+      let reviewerIds = resolvedPeople.reviewerIds;
+      let reviewerSnapshot = resolvedPeople.reviewerSnapshot;
+      if (!reviewersEnabled) {
+        reviewerIds = [];
+        reviewerSnapshot = "";
+      }
+      await this.groups.assertReviewersAllowed(row.student_id, reviewerIds);
 
       await this.assertAuthorsAvailableForSubmission(client, authorIds, submissionId);
 
@@ -1067,7 +1201,12 @@ export class SubmissionsService {
         `SELECT 1 FROM submission_files WHERE submission_id = $1::uuid AND file_type = 'thesis' LIMIT 1`,
         [submissionId]
       );
-      if (!thesisExists.rows[0] && !thesisFile) {
+      if (
+        (await this.usesNative("thesisFile", "file")) &&
+        (await this.fieldMust("thesisFile", true)) &&
+        !thesisExists.rows[0] &&
+        !thesisFile
+      ) {
         throw new BadRequestException("Thesis PDF is required");
       }
 
@@ -1156,6 +1295,7 @@ export class SubmissionsService {
         ]
       );
 
+      placed = await this.workflow.snapshot(client, submissionId);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -1164,14 +1304,16 @@ export class SubmissionsService {
       client.release();
     }
 
-    this.workflowMail.notifySafely("reviewer_assigned", () =>
-      this.workflowMail.notifyReviewersOnSubmit(submissionId)
-    );
+    if (placed.role === "reviewer") {
+      this.workflowMail.notifySafely("reviewer_assigned", () =>
+        this.workflowMail.notifyReviewersOnSubmit(submissionId)
+      );
+    }
     this.workflowMail.notifySafely("student_submitted", () =>
       this.workflowMail.notifyStudentOnSubmitted(submissionId, resubmit)
     );
 
-    return { id: submissionId, status: "reviewing" };
+    return { id: submissionId, status: placed.status };
   }
 
   async deleteSubmission(actor: JwtPayload, submissionId: string) {
@@ -1770,6 +1912,48 @@ export class SubmissionsService {
       await unlink(filePath);
     } catch {
       // ignore missing file on disk
+    }
+  }
+
+  private async usesNative(fieldKey: string, nativeType: string) {
+    const state = await this.formFieldsService.fieldState(fieldKey);
+    if (!state) {
+      return true;
+    }
+    return state.enabled && state.inputType === nativeType;
+  }
+
+  private async fieldActive(fieldKey: string, fallback: boolean) {
+    const state = await this.formFieldsService.fieldState(fieldKey);
+    if (!state) {
+      return fallback;
+    }
+    return state.enabled;
+  }
+
+  private async fieldMust(fieldKey: string, fallback: boolean) {
+    const state = await this.formFieldsService.fieldState(fieldKey);
+    if (!state) {
+      return fallback;
+    }
+    return state.enabled && state.required;
+  }
+
+  private async assertConfiguredMetadata(meta: NormalizedThesisMetadata) {
+    const checks: Array<[string, string, string]> = [
+      ["titleVi", meta.titleVi, "Vietnamese thesis title is required"],
+      ["titleEn", meta.titleEn, "English thesis title is required"],
+      ["thesisAdvisors", meta.thesisAdvisors, "Advisor(s) is required"],
+      ["major", meta.major, "Major is required"],
+      ["thesisYear", meta.thesisYear, "Year is required"]
+    ];
+    for (const [key, value, message] of checks) {
+      if ((await this.fieldMust(key, true)) && !value) {
+        throw new BadRequestException(message);
+      }
+    }
+    if (meta.thesisYear && (await this.fieldActive("thesisYear", true)) && !/^\d{4}$/.test(meta.thesisYear)) {
+      throw new BadRequestException("Year must be a four-digit number");
     }
   }
 }

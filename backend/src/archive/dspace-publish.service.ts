@@ -46,7 +46,7 @@ export class DspacePublishService {
     dspaceStatus?: string;
   }): Promise<DspacePublishQueueItem[]> {
     const params: unknown[] = [];
-    const where: string[] = [`s.status = 'archived'`];
+    const where: string[] = [`s.status IN ('approved', 'archived')`];
 
     if (filters.facultyId?.trim()) {
       params.push(filters.facultyId.trim());

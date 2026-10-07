@@ -7,13 +7,19 @@ import {
 import { WorkflowMailService } from "../mail/workflow-mail.service";
 import { createPgPool } from "../users/db-pool";
 import type { JwtPayload } from "../auth/jwt.strategy";
+import { GroupsService } from "../workflow/groups.service";
+import { WorkflowService } from "../workflow/workflow.service";
 import { ReviewActionDto } from "./dto/review-action.dto";
 
 @Injectable()
 export class ReviewsService {
   private readonly db = createPgPool();
 
-  constructor(private readonly workflowMail: WorkflowMailService) {}
+  constructor(
+    private readonly workflowMail: WorkflowMailService,
+    private readonly workflow: WorkflowService,
+    private readonly groups: GroupsService
+  ) {}
 
   private libraryIntakeReadyClause() {
     return `s.status = 'reviewing'
@@ -32,6 +38,7 @@ export class ReviewsService {
     if (user.role !== "reviewer") {
       throw new ForbiddenException();
     }
+    await this.workflow.backfillOpenSubmissions();
 
     const result = await this.db.query(
       `SELECT s.id,
@@ -75,6 +82,9 @@ export class ReviewsService {
        LEFT JOIN faculties f ON f.id = sem.faculty_id
        LEFT JOIN submission_files sf ON sf.submission_id = s.id
        WHERE r.reviewer_id = $1
+         AND s.status = 'reviewing'
+         AND ${this.workflow.currentStepSql("reviewer")}
+         AND ${this.groups.reviewerCanSeeStudentSql("$1")}
        GROUP BY s.id,
                 s.title,
                 s.abstract,
@@ -103,7 +113,7 @@ export class ReviewsService {
       [user.sub]
     );
 
-    return result.rows;
+    return this.workflow.annotate(result.rows);
   }
 
   async act(user: JwtPayload, dto: ReviewActionDto) {
@@ -114,8 +124,13 @@ export class ReviewsService {
       throw new BadRequestException("Reviewers cannot archive submissions");
     }
 
-    const assignment = await this.db.query(
-      `SELECT r.decision, s.status AS submission_status
+    await this.workflow.assertCurrentRole(dto.submissionId, "reviewer");
+    const assignment = await this.db.query<{
+      decision: string;
+      submission_status: string;
+      student_id: string;
+    }>(
+      `SELECT r.decision, s.status AS submission_status, s.student_id
        FROM reviews r
        JOIN submissions s ON s.id = r.submission_id
        WHERE r.submission_id = $1 AND r.reviewer_id = $2
@@ -132,6 +147,7 @@ export class ReviewsService {
     if (row.submission_status !== "reviewing") {
       throw new BadRequestException("Submission is not in reviewer stage");
     }
+    await this.groups.assertReviewerMayAct(user.sub, row.student_id);
 
     if (dto.action === "reject") {
       if (!dto.comment || !dto.comment.trim()) {
@@ -141,6 +157,7 @@ export class ReviewsService {
 
     const reviewDecision = dto.action === "approve" ? "approved" : "reject";
     let allReviewersApproved = false;
+    let enteredRole: string | null = null;
     const rejectReason = dto.action === "reject" ? dto.comment?.trim() || "" : "";
 
     const client = await this.db.connect();
@@ -194,6 +211,8 @@ export class ReviewsService {
         const pendingCount = pending.rows[0]?.cnt ?? 0;
         if (pendingCount === 0) {
           allReviewersApproved = true;
+          const advanced = await this.workflow.advance(client, dto.submissionId);
+          enteredRole = advanced.enteredRole;
           await client.query(
             `INSERT INTO submission_events (id, submission_id, actor_id, actor_role, event_type, payload)
              VALUES ($1, $2, $3, 'system', 'status_changed', $4::jsonb)`,
@@ -202,8 +221,8 @@ export class ReviewsService {
               dto.submissionId,
               user.sub,
               JSON.stringify({
-                from: row.submission_status,
-                to: "reviewing",
+                from: advanced.fromStatus,
+                to: advanced.toStatus,
                 reason: "all_reviewers_approved"
               })
             ]
@@ -235,9 +254,11 @@ export class ReviewsService {
         this.workflowMail.notifyStudentOnReviewerDecision(dto.submissionId, "approved", actorName)
       );
       if (allReviewersApproved) {
-        this.workflowMail.notifySafely("library_review", () =>
-          this.workflowMail.notifyLibraryOnAllReviewersApproved(dto.submissionId)
-        );
+        if (enteredRole === "library_staff") {
+          this.workflowMail.notifySafely("library_review", () =>
+            this.workflowMail.notifyLibraryOnAllReviewersApproved(dto.submissionId)
+          );
+        }
         this.workflowMail.notifySafely("student_all_reviewers_approved", () =>
           this.workflowMail.notifyStudentOnAllReviewersApproved(dto.submissionId)
         );
@@ -310,21 +331,27 @@ export class ReviewsService {
        ORDER BY s.created_at DESC`,
       params
     );
-    return result.rows;
+    return this.workflow.annotate(result.rows);
   }
 
   async getLibraryQueue(user: JwtPayload) {
     if (user.role !== "library_staff") {
       throw new ForbiddenException();
     }
-    return this.getQueueRows(this.libraryIntakeReadyClause());
+    await this.workflow.backfillOpenSubmissions();
+    return this.getQueueRows(
+      `s.status = 'reviewing' AND ${this.workflow.currentStepSql("library_staff")}`
+    );
   }
 
   async getDirectorQueue(user: JwtPayload) {
     if (user.role !== "director") {
       throw new ForbiddenException();
     }
-    return this.getQueueRows(`s.status = 'approved'`);
+    await this.workflow.backfillOpenSubmissions();
+    return this.getQueueRows(
+      `s.status IN ('reviewing', 'approved') AND ${this.workflow.currentStepSql("director")}`
+    );
   }
 
   private async assertLibraryIntakeReady(submissionId: string) {
@@ -348,13 +375,17 @@ export class ReviewsService {
       throw new BadRequestException("Library staff cannot archive submissions");
     }
 
-    await this.assertLibraryIntakeReady(dto.submissionId);
+    const step = await this.workflow.assertCurrentRole(dto.submissionId, "library_staff");
+    if (step.status !== "reviewing") {
+      throw new BadRequestException("Submission is not in reviewing stage");
+    }
 
     if (dto.action === "reject" && (!dto.comment || !dto.comment.trim())) {
       throw new BadRequestException("Reject reason is required");
     }
 
-    const nextStatus = dto.action === "approve" ? "approved" : "rejected";
+    let nextStatus = dto.action === "approve" ? "approved" : "rejected";
+    let enteredRole: string | null = null;
     const rejectReason = dto.action === "reject" ? dto.comment?.trim() || "" : "";
     const client = await this.db.connect();
     try {
@@ -368,7 +399,13 @@ export class ReviewsService {
         throw new BadRequestException("Submission is not in reviewing stage");
       }
 
-      await client.query(`UPDATE submissions SET status = $1 WHERE id = $2::uuid`, [nextStatus, dto.submissionId]);
+      if (dto.action === "approve") {
+        const advanced = await this.workflow.advance(client, dto.submissionId);
+        nextStatus = advanced.toStatus;
+        enteredRole = advanced.enteredRole;
+      } else {
+        await client.query(`UPDATE submissions SET status = 'rejected' WHERE id = $1::uuid`, [dto.submissionId]);
+      }
       await client.query(
         `INSERT INTO submission_events (id, submission_id, actor_id, actor_role, event_type, payload)
          VALUES ($1, $2, $3, 'library_staff', $4, $5::jsonb)`,
@@ -406,9 +443,11 @@ export class ReviewsService {
 
     const actorName = user.displayName || user.username;
     if (dto.action === "approve") {
-      this.workflowMail.notifySafely("director_review", () =>
-        this.workflowMail.notifyDirectorsOnLibraryApproved(dto.submissionId)
-      );
+      if (enteredRole === "director") {
+        this.workflowMail.notifySafely("director_review", () =>
+          this.workflowMail.notifyDirectorsOnLibraryApproved(dto.submissionId)
+        );
+      }
       this.workflowMail.notifySafely("student_library_approved", () =>
         this.workflowMail.notifyStudentOnLibraryDecision(dto.submissionId, "approved", actorName)
       );
@@ -430,8 +469,15 @@ export class ReviewsService {
     if (user.role !== "director") {
       throw new ForbiddenException();
     }
-    if (dto.action !== "archive" && dto.action !== "reject") {
-      throw new BadRequestException("Director can archive (accept) or reject approved submissions");
+    if (dto.action !== "archive" && dto.action !== "reject" && dto.action !== "approve") {
+      throw new BadRequestException("Director can approve, archive, or reject the current step");
+    }
+    const step = await this.workflow.assertCurrentRole(dto.submissionId, "director");
+    if (dto.action === "archive" && !step.isLast) {
+      throw new BadRequestException("Only the final director step can archive");
+    }
+    if (dto.action === "approve" && step.isLast) {
+      throw new BadRequestException("The final director step is archived, not approved");
     }
 
     const actorName = user.displayName || user.username;
@@ -451,25 +497,24 @@ export class ReviewsService {
       if (!row) {
         throw new NotFoundException("Submission not found");
       }
-      if (row.status !== "approved") {
-        throw new BadRequestException("Only approved submissions can be archived or rejected by the director");
+      if (row.status !== "approved" && row.status !== "reviewing") {
+        throw new BadRequestException("This submission is not waiting for the director");
       }
 
-      if (dto.action === "archive") {
-        await client.query(
-          `UPDATE submissions
-           SET status = 'archived',
-               dspace_publish_status = COALESCE(NULLIF(dspace_publish_status, ''), 'pending')
-           WHERE id = $1::uuid`,
-          [dto.submissionId]
-        );
+      if (dto.action === "archive" || dto.action === "approve") {
+        const advanced = await this.workflow.advance(client, dto.submissionId);
+        if (dto.action === "archive" && !advanced.archived) {
+          throw new BadRequestException("Only the final director step can archive");
+        }
+        const eventType = dto.action === "archive" ? "director_archived" : "director_approved";
         await client.query(
           `INSERT INTO submission_events (id, submission_id, actor_id, actor_role, event_type, payload)
-           VALUES ($1, $2, $3, 'director', 'director_archived', $4::jsonb)`,
+           VALUES ($1, $2, $3, 'director', $4, $5::jsonb)`,
           [
             randomUUID(),
             dto.submissionId,
             user.sub,
+            eventType,
             JSON.stringify({ comment: dto.comment?.trim() || null })
           ]
         );
@@ -481,9 +526,9 @@ export class ReviewsService {
             dto.submissionId,
             user.sub,
             JSON.stringify({
-              from: row.status,
-              to: "archived",
-              reason: "director_archived"
+              from: advanced.fromStatus,
+              to: advanced.toStatus,
+              reason: eventType
             })
           ]
         );
@@ -522,6 +567,10 @@ export class ReviewsService {
       throw error;
     } finally {
       client.release();
+    }
+
+    if (dto.action === "approve") {
+      return { ok: true };
     }
 
     if (dto.action === "archive") {

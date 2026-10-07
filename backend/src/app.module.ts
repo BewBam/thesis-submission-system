@@ -6,9 +6,10 @@ import { SubmissionsModule } from "./submissions/submissions.module";
 import { ReviewsModule } from "./reviews/reviews.module";
 import { AdminModule } from "./admin/admin.module";
 import { ArchiveModule } from "./archive/archive.module";
+import { WorkflowModule } from "./workflow/workflow.module";
 
 @Module({
-  imports: [AuthModule, UsersModule, SubmissionsModule, ReviewsModule, AdminModule, ArchiveModule],
+  imports: [AuthModule, UsersModule, SubmissionsModule, ReviewsModule, AdminModule, ArchiveModule, WorkflowModule],
   controllers: [AppController]
 })
 export class AppModule {}

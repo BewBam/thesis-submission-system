@@ -33,8 +33,8 @@ export class CreateFormFieldDto {
   dspacePath?: string;
 
   @IsOptional()
-  @IsIn(["text", "textarea", "select", "year"])
-  inputType?: "text" | "textarea" | "select" | "year";
+  @IsIn(["text", "textarea", "select", "year", "file"])
+  inputType?: "text" | "textarea" | "select" | "year" | "file";
 
   @IsOptional()
   @IsBoolean()

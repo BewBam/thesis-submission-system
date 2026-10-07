@@ -1374,6 +1374,12 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                         }}
                         columns={[
                           { title: t("Title"), dataIndex: "title", ellipsis: true },
+                          {
+                            title: t("Status"),
+                            dataIndex: "status",
+                            width: 120,
+                            render: (status) => statusText(status, t)
+                          },
                           { title: t("Author"), dataIndex: "author", width: 160, ellipsis: true },
                           {
                             title: t("Faculty"),

@@ -94,21 +94,6 @@ function sortEmailTechnical(items) {
   return [...items].sort((a, b) => (rank.get(a.key) ?? 99) - (rank.get(b.key) ?? 99));
 }
 
-const BUILTIN_FORM_FIELDS = [
-  { id: "builtin-faculty", fieldKey: "archiveFacultyId", labelKey: "Faculty", inputType: "select", builtin: true },
-  { id: "builtin-semester", fieldKey: "archiveSemesterId", labelKey: "Semester", inputType: "select", builtin: true },
-  { id: "builtin-period", fieldKey: "submissionPeriodId", labelKey: "Submission period", inputType: "select", builtin: true },
-  { id: "builtin-email", fieldKey: "email", labelKey: "Email", inputType: "text", builtin: true },
-  { id: "builtin-title-vi", fieldKey: "titleVi", labelKey: "Thesis title (Vietnamese)", inputType: "text", builtin: true },
-  { id: "builtin-title-en", fieldKey: "titleEn", labelKey: "Thesis title (English)", inputType: "text", builtin: true },
-  { id: "builtin-advisors", fieldKey: "thesisAdvisors", labelKey: "Advisor(s)", inputType: "text", builtin: true },
-  { id: "builtin-major", fieldKey: "major", labelKey: "Major", inputType: "text", builtin: true },
-  { id: "builtin-year", fieldKey: "thesisYear", labelKey: "Year", inputType: "year", builtin: true },
-  { id: "builtin-authors", fieldKey: "authorIds", labelKey: "Authors", inputType: "select", builtin: true },
-  { id: "builtin-reviewers", fieldKey: "reviewerIds", labelKey: "Reviewers", inputType: "select", builtin: true },
-  { id: "builtin-pdf", fieldKey: "thesisFile", labelKey: "Thesis PDF", inputType: "file", builtin: true }
-];
-
 function renderSettingControl(item, t) {
   if (item.key === "login_method") {
     return (
@@ -184,6 +169,16 @@ export default function AdminPanel({
   const [savingRoles, setSavingRoles] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [formFields, setFormFields] = useState([]);
+  const [workflowSteps, setWorkflowSteps] = useState([]);
+  const [loadingWorkflow, setLoadingWorkflow] = useState(false);
+  const [savingWorkflow, setSavingWorkflow] = useState(false);
+  const [newStepRole, setNewStepRole] = useState("reviewer");
+  const [newStepLabel, setNewStepLabel] = useState("");
+  const [groups, setGroups] = useState([]);
+  const [loadingGroups, setLoadingGroups] = useState(false);
+  const [groupName, setGroupName] = useState("");
+  const [groupKind, setGroupKind] = useState("student");
+  const [selectedGroupId, setSelectedGroupId] = useState(null);
   const [loadingFormFields, setLoadingFormFields] = useState(false);
   const [savingFormField, setSavingFormField] = useState(false);
   const [formFieldModalOpen, setFormFieldModalOpen] = useState(false);
@@ -310,6 +305,61 @@ export default function AdminPanel({
     }
   }, [auth.token]);
 
+  const loadWorkflow = useCallback(async () => {
+    setLoadingWorkflow(true);
+    try {
+      const response = await fetch("/api/admin/workflow", { headers: authHeaders(auth.token) });
+      const payload = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(payload?.message || "Unable to load workflow");
+      }
+      setWorkflowSteps(Array.isArray(payload) ? payload : []);
+    } catch (error) {
+      message.error(tr(error.message));
+    } finally {
+      setLoadingWorkflow(false);
+    }
+  }, [auth.token]);
+
+  const saveWorkflow = async (steps) => {
+    setSavingWorkflow(true);
+    try {
+      const response = await fetch("/api/admin/workflow", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", ...authHeaders(auth.token) },
+        body: JSON.stringify({
+          steps: steps.map((step) => ({ role: step.role, label: step.label || "" }))
+        })
+      });
+      const payload = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(payload?.message || "Unable to save workflow");
+      }
+      setWorkflowSteps(Array.isArray(payload) ? payload : []);
+      message.success(t("Workflow saved"));
+    } catch (error) {
+      message.error(tr(error.message));
+    } finally {
+      setSavingWorkflow(false);
+    }
+  };
+
+  const loadGroups = useCallback(async () => {
+    setLoadingGroups(true);
+    try {
+      const response = await fetch("/api/admin/groups", { headers: authHeaders(auth.token) });
+      const payload = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(payload?.message || "Unable to load groups");
+      }
+      setGroups(Array.isArray(payload) ? payload : []);
+    } catch (error) {
+      message.error(tr(error.message));
+    } finally {
+      setLoadingGroups(false);
+    }
+  }, [auth.token]);
+
   useEffect(() => {
     if (formFieldsOnly) {
       void loadFormFields();
@@ -326,8 +376,13 @@ export default function AdminPanel({
       void loadRoles();
     } else if (activeTab === "form-fields") {
       void loadFormFields();
+    } else if (activeTab === "workflow") {
+      void loadWorkflow();
+    } else if (activeTab === "groups") {
+      void loadUsers();
+      void loadGroups();
     }
-  }, [activeTab, emailOnly, formFieldsOnly, loadUsers, loadFaculties, loadRoles, loadSettings, loadFormFields]);
+  }, [activeTab, emailOnly, formFieldsOnly, loadUsers, loadFaculties, loadRoles, loadSettings, loadFormFields, loadWorkflow, loadGroups]);
 
   useEffect(() => {
     const entry = roles.find((r) => r.role === selectedRole);
@@ -917,9 +972,7 @@ export default function AdminPanel({
   const formFieldsPanel = (
     <>
       <Paragraph type="secondary">
-        {t("Configure metadata fields on the student form and when publishing to DSpace. Toggle")}{" "}
-        <Text strong>{t("Required")}</Text> / <Text strong>{t("Enabled")}</Text>
-        {t(", or add custom fields. System fields (Author, Title, …) cannot be deleted — disable them instead.")}
+        {t("Configure every field on the student form. Turn a field off to hide it, or change its input type. Disabled fields are not required when submitting.")}
       </Paragraph>
       <Space style={{ marginBottom: 12 }} wrap>
         <Button type="primary" onClick={openCreateFormField}>{t("Add field")}</Button>
@@ -928,7 +981,7 @@ export default function AdminPanel({
       <Table
         rowKey="id"
         loading={loadingFormFields}
-        dataSource={[...BUILTIN_FORM_FIELDS, ...formFields]}
+        dataSource={formFields}
         pagination={false}
         scroll={{ x: 1280 }}
         columns={[
@@ -936,7 +989,7 @@ export default function AdminPanel({
             title: t("Label"),
             dataIndex: "label",
             width: 160,
-            render: (_value, row) => (row.builtin ? t(row.labelKey) : fieldDisplayLabel(row, t))
+            render: (_value, row) => fieldDisplayLabel(row, t)
           },
           { title: t("Key"), dataIndex: "fieldKey", width: 140, render: (v) => <Text code>{v}</Text> },
           {
@@ -957,8 +1010,7 @@ export default function AdminPanel({
             width: 100,
             render: (v, row) => (
               <Switch
-                checked={row.builtin ? true : v}
-                disabled={row.builtin}
+                checked={v}
                 onChange={(checked) => void toggleFormFieldFlag(row, { required: checked })}
               />
             )
@@ -969,8 +1021,7 @@ export default function AdminPanel({
             width: 100,
             render: (v, row) => (
               <Switch
-                checked={row.builtin ? true : v}
-                disabled={row.builtin}
+                checked={v}
                 onChange={(checked) => void toggleFormFieldFlag(row, { enabled: checked })}
               />
             )
@@ -985,20 +1036,12 @@ export default function AdminPanel({
           {
             title: t("Actions"),
             width: 220,
-            render: (_, row) =>
-              row.builtin ? (
-                <Text type="secondary">{t("Always on the form")}</Text>
-              ) : (
+            render: (_, row) => (
               <Space>
                 <Button size="small" onClick={() => openEditFormField(row)}>{t("Edit")}</Button>
-                <Button
-                  size="small"
-                  danger
-                  disabled={row.systemLocked}
-                  onClick={() => deleteFormField(row)}
-                >{t("Delete")}</Button>
+                <Button size="small" danger onClick={() => deleteFormField(row)}>{t("Delete")}</Button>
               </Space>
-              )
+            )
           }
         ]}
       />
@@ -1044,7 +1087,8 @@ export default function AdminPanel({
                 { value: "text", label: t("Text") },
                 { value: "textarea", label: t("Textarea") },
                 { value: "select", label: t("Select") },
-                { value: "year", label: t("Year") }
+                { value: "year", label: t("Year") },
+                { value: "file", label: t("File") }
               ]}
             />
           </Form.Item>
@@ -1071,6 +1115,221 @@ export default function AdminPanel({
           </Form.Item>
         </Form>
       </Modal>
+  );
+
+  const selectedGroup = groups.find((group) => group.id === selectedGroupId) || null;
+  const moveWorkflowStep = (index, direction) => {
+    const next = [...workflowSteps];
+    const target = index + direction;
+    if (target < 0 || target >= next.length) {
+      return;
+    }
+    const [item] = next.splice(index, 1);
+    next.splice(target, 0, item);
+    setWorkflowSteps(next);
+  };
+  const workflowPanel = (
+    <>
+      <Paragraph type="secondary">
+        {t("Add, remove, and reorder approval steps. Each step uses an existing role. A role can be left out or used more than once. Theses already submitted keep the steps they had when they were submitted.")}
+      </Paragraph>
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Select
+          value={newStepRole}
+          onChange={setNewStepRole}
+          style={{ minWidth: 180 }}
+          options={[
+            { value: "reviewer", label: roleText("reviewer", t) },
+            { value: "library_staff", label: roleText("library_staff", t) },
+            { value: "director", label: roleText("director", t) }
+          ]}
+        />
+        <Input
+          value={newStepLabel}
+          onChange={(event) => setNewStepLabel(event.target.value)}
+          placeholder={t("Step label")}
+          style={{ minWidth: 220 }}
+        />
+        <Button
+          onClick={() => {
+            setWorkflowSteps((current) => [...current, { role: newStepRole, label: newStepLabel.trim() }]);
+            setNewStepLabel("");
+          }}
+        >{t("Add step")}</Button>
+        <Button type="primary" loading={savingWorkflow} onClick={() => void saveWorkflow(workflowSteps)}>{t("Save workflow")}</Button>
+        <Button onClick={() => void loadWorkflow()} loading={loadingWorkflow}>{t("Refresh")}</Button>
+      </Space>
+      <Table
+        rowKey={(row, index) => `${row.role}-${index}`}
+        loading={loadingWorkflow}
+        dataSource={workflowSteps}
+        pagination={false}
+        columns={[
+          { title: t("Order"), width: 80, render: (_v, _row, index) => index + 1 },
+          { title: t("Role"), dataIndex: "role", render: (role) => roleText(role, t) },
+          { title: t("Label"), dataIndex: "label", render: (label) => label || "—" },
+          {
+            title: t("Actions"),
+            width: 220,
+            render: (_v, _row, index) => (
+              <Space>
+                <Button size="small" disabled={index === 0} onClick={() => moveWorkflowStep(index, -1)}>{t("Up")}</Button>
+                <Button size="small" disabled={index === workflowSteps.length - 1} onClick={() => moveWorkflowStep(index, 1)}>{t("Down")}</Button>
+                <Button
+                  size="small"
+                  danger
+                  disabled={workflowSteps.length <= 1}
+                  onClick={() => setWorkflowSteps((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                >{t("Delete")}</Button>
+              </Space>
+            )
+          }
+        ]}
+      />
+    </>
+  );
+  const groupMemberOptions = users
+    .filter((user) => user.role === (selectedGroup?.kind === "reviewer" ? "reviewer" : "student") && user.status !== "disabled")
+    .map((user) => ({ value: user.username, label: `${user.displayName || user.username} (${user.username})` }));
+  const studentGroupOptions = groups
+    .filter((group) => group.kind === "student")
+    .map((group) => ({ value: group.id, label: group.name }));
+  const saveGroupMembers = async (userIds) => {
+    if (!selectedGroup) {
+      return;
+    }
+    const response = await fetch(`/api/admin/groups/${selectedGroup.id}/members`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeaders(auth.token) },
+      body: JSON.stringify({ userIds })
+    });
+    const payload = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(payload?.message || "Unable to save members");
+    }
+    await loadGroups();
+    message.success(t("Group members saved"));
+  };
+  const saveGroupGrants = async (studentGroupIds) => {
+    if (!selectedGroup) {
+      return;
+    }
+    const response = await fetch(`/api/admin/groups/${selectedGroup.id}/grants`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeaders(auth.token) },
+      body: JSON.stringify({ studentGroupIds })
+    });
+    const payload = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(payload?.message || "Unable to save grants");
+    }
+    await loadGroups();
+    message.success(t("Reviewer grants saved"));
+  };
+  const groupsPanel = (
+    <>
+      <Paragraph type="secondary">
+        {t("Create student and reviewer groups, assign users, then choose which student groups a reviewer group may review. Until a grant exists, reviewer selection and queues stay unchanged.")}
+      </Paragraph>
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Input value={groupName} onChange={(event) => setGroupName(event.target.value)} placeholder={t("Group name")} />
+        <Select
+          value={groupKind}
+          onChange={setGroupKind}
+          style={{ minWidth: 160 }}
+          options={[
+            { value: "student", label: roleText("student", t) },
+            { value: "reviewer", label: roleText("reviewer", t) }
+          ]}
+        />
+        <Button
+          type="primary"
+          onClick={() => {
+            void (async () => {
+              try {
+                const response = await fetch("/api/admin/groups", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", ...authHeaders(auth.token) },
+                  body: JSON.stringify({ name: groupName.trim(), kind: groupKind })
+                });
+                const payload = await parseResponse(response);
+                if (!response.ok) {
+                  throw new Error(payload?.message || "Unable to create group");
+                }
+                setGroupName("");
+                await loadGroups();
+              } catch (error) {
+                message.error(tr(error.message));
+              }
+            })();
+          }}
+        >{t("Create group")}</Button>
+        <Button onClick={() => void loadGroups()} loading={loadingGroups}>{t("Refresh")}</Button>
+      </Space>
+      <Table
+        rowKey="id"
+        loading={loadingGroups}
+        dataSource={groups}
+        pagination={false}
+        onRow={(record) => ({ onClick: () => setSelectedGroupId(record.id) })}
+        columns={[
+          { title: t("Name"), dataIndex: "name" },
+          { title: t("Kind"), dataIndex: "kind", render: (kind) => roleText(kind, t) },
+          { title: t("Members"), render: (_v, row) => (row.members || []).length },
+          {
+            title: t("Actions"),
+            render: (_v, row) => (
+              <Button
+                size="small"
+                danger
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void (async () => {
+                    const response = await fetch(`/api/admin/groups/${row.id}`, {
+                      method: "DELETE",
+                      headers: authHeaders(auth.token)
+                    });
+                    if (response.ok) {
+                      if (selectedGroupId === row.id) {
+                        setSelectedGroupId(null);
+                      }
+                      await loadGroups();
+                    }
+                  })();
+                }}
+              >{t("Delete")}</Button>
+            )
+          }
+        ]}
+      />
+      {selectedGroup ? (
+        <Space direction="vertical" style={{ width: "100%", marginTop: 16 }}>
+          <Text strong>{selectedGroup.name}</Text>
+          <Select
+            mode="multiple"
+            style={{ width: "100%" }}
+            value={selectedGroup.members || []}
+            options={groupMemberOptions}
+            onChange={(userIds) => {
+              void saveGroupMembers(userIds).catch((error) => message.error(tr(error.message)));
+            }}
+            placeholder={t("Assign users")}
+          />
+          {selectedGroup.kind === "reviewer" ? (
+            <Select
+              mode="multiple"
+              style={{ width: "100%" }}
+              value={selectedGroup.grants || []}
+              options={studentGroupOptions}
+              onChange={(studentGroupIds) => {
+                void saveGroupGrants(studentGroupIds).catch((error) => message.error(tr(error.message)));
+              }}
+              placeholder={t("Student groups this reviewer group may review")}
+            />
+          ) : null}
+        </Space>
+      ) : null}
+    </>
   );
 
   const tabItems = [
@@ -1172,6 +1431,16 @@ export default function AdminPanel({
       key: "form-fields",
       label: t("Submission fields"),
       children: formFieldsPanel
+    },
+    {
+      key: "workflow",
+      label: t("Approval workflow"),
+      children: workflowPanel
+    },
+    {
+      key: "groups",
+      label: t("User groups"),
+      children: groupsPanel
     },
     {
       key: "settings",

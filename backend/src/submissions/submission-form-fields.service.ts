@@ -14,7 +14,7 @@ export type SubmissionFormField = {
   fieldKey: string;
   label: string;
   dspacePath: string;
-  inputType: "text" | "textarea" | "select" | "year";
+  inputType: "text" | "textarea" | "select" | "year" | "file";
   required: boolean;
   enabled: boolean;
   sortOrder: number;
@@ -24,6 +24,21 @@ export type SubmissionFormField = {
   columnName: string | null;
   systemLocked: boolean;
 };
+
+const STRUCTURAL_FORM_KEYS = new Set([
+  "archiveFacultyId",
+  "archiveSemesterId",
+  "submissionPeriodId",
+  "email",
+  "titleVi",
+  "titleEn",
+  "thesisAdvisors",
+  "major",
+  "thesisYear",
+  "authorIds",
+  "reviewerIds",
+  "thesisFile"
+]);
 
 const COLUMN_WHITELIST = new Set([
   "author",
@@ -50,6 +65,20 @@ export class SubmissionFormFieldsService {
       `SELECT * FROM submission_form_fields WHERE enabled = TRUE ORDER BY sort_order ASC, label ASC`
     );
     return result.rows.map((row) => this.mapRow(row));
+  }
+
+  async fieldState(
+    fieldKey: string
+  ): Promise<{ enabled: boolean; required: boolean; inputType: string } | null> {
+    const result = await this.db.query<{ enabled: boolean; required: boolean; input_type: string }>(
+      `SELECT enabled, required, input_type FROM submission_form_fields WHERE field_key = $1 LIMIT 1`,
+      [fieldKey]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+    return { enabled: Boolean(row.enabled), required: Boolean(row.required), inputType: row.input_type };
   }
 
   async create(dto: CreateFormFieldDto): Promise<SubmissionFormField> {
@@ -152,16 +181,14 @@ export class SubmissionFormFieldsService {
       );
     }
 
-    if (!existing.systemLocked) {
-      if (dto.fieldKey !== undefined) {
-        const nextKey = this.normalizeKey(dto.fieldKey);
-        if (nextKey !== existing.fieldKey) {
-          await this.assertUniqueKey(nextKey, fieldId);
-          await this.db.query(
-            `UPDATE submission_form_fields SET field_key = $1, updated_at = NOW() WHERE id = $2::uuid`,
-            [nextKey, fieldId]
-          );
-        }
+    if (dto.fieldKey !== undefined) {
+      const nextKey = this.normalizeKey(dto.fieldKey);
+      if (nextKey !== existing.fieldKey) {
+        await this.assertUniqueKey(nextKey, fieldId);
+        await this.db.query(
+          `UPDATE submission_form_fields SET field_key = $1, updated_at = NOW() WHERE id = $2::uuid`,
+          [nextKey, fieldId]
+        );
       }
     }
 
@@ -169,12 +196,7 @@ export class SubmissionFormFieldsService {
   }
 
   async remove(fieldId: string) {
-    const existing = await this.getById(fieldId);
-    if (existing.systemLocked) {
-      throw new BadRequestException(
-        "System field cannot be deleted. Disable it or toggle required instead."
-      );
-    }
+    await this.getById(fieldId);
     await this.db.query(`DELETE FROM submission_form_fields WHERE id = $1::uuid`, [fieldId]);
     return { deleted: true, id: fieldId };
   }
@@ -195,7 +217,7 @@ export class SubmissionFormFieldsService {
 
     for (const field of fields) {
       // author/title are owned by workflow (authorIds / titleEn); skip form value overwrite here
-      if (field.fieldKey === "author" || field.fieldKey === "title") {
+      if (field.fieldKey === "author" || field.fieldKey === "title" || STRUCTURAL_FORM_KEYS.has(field.fieldKey)) {
         continue;
       }
 

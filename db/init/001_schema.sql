@@ -146,6 +146,7 @@ CREATE TABLE submissions (
   language TEXT NOT NULL DEFAULT 'vie',
   description TEXT NOT NULL DEFAULT '',
   extra_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  current_step INT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -241,7 +242,7 @@ CREATE TABLE submission_form_fields (
   label TEXT NOT NULL,
   dspace_path TEXT NOT NULL DEFAULT '',
   input_type TEXT NOT NULL DEFAULT 'text'
-    CHECK (input_type IN ('text', 'textarea', 'select', 'year')),
+    CHECK (input_type IN ('text', 'textarea', 'select', 'year', 'file')),
   required BOOLEAN NOT NULL DEFAULT FALSE,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   sort_order INT NOT NULL DEFAULT 0,
@@ -588,3 +589,63 @@ INSERT INTO submission_form_fields (
     TRUE
   )
 ON CONFLICT (field_key) DO NOTHING;
+
+UPDATE submission_form_fields SET system_locked = FALSE;
+
+INSERT INTO submission_form_fields (
+  id, field_key, label, dspace_path, input_type, required, enabled, sort_order,
+  options, default_value, storage, column_name, system_locked
+) VALUES
+  ('b1000001-0001-4000-8000-000000000001', 'archiveFacultyId', 'Faculty', '', 'select', TRUE, TRUE, 1, '[]'::jsonb, '', 'extra', NULL, FALSE),
+  ('b1000001-0001-4000-8000-000000000002', 'archiveSemesterId', 'Semester', '', 'select', TRUE, TRUE, 2, '[]'::jsonb, '', 'extra', NULL, FALSE),
+  ('b1000001-0001-4000-8000-000000000003', 'submissionPeriodId', 'Submission period', '', 'select', TRUE, TRUE, 3, '[]'::jsonb, '', 'extra', NULL, FALSE),
+  ('b1000001-0001-4000-8000-000000000004', 'email', 'Email', '', 'text', FALSE, TRUE, 4, '[]'::jsonb, '', 'extra', NULL, FALSE),
+  ('b1000001-0001-4000-8000-000000000005', 'titleVi', 'Thesis title (Vietnamese)', '', 'text', TRUE, TRUE, 5, '[]'::jsonb, '', 'extra', NULL, FALSE),
+  ('b1000001-0001-4000-8000-000000000006', 'titleEn', 'Thesis title (English)', '', 'text', TRUE, TRUE, 6, '[]'::jsonb, '', 'extra', NULL, FALSE),
+  ('b1000001-0001-4000-8000-000000000007', 'thesisAdvisors', 'Advisor(s)', '', 'text', TRUE, TRUE, 7, '[]'::jsonb, '', 'extra', NULL, FALSE),
+  ('b1000001-0001-4000-8000-000000000008', 'major', 'Major', '', 'text', TRUE, TRUE, 8, '[]'::jsonb, '', 'extra', NULL, FALSE),
+  ('b1000001-0001-4000-8000-000000000009', 'thesisYear', 'Year', '', 'year', TRUE, TRUE, 9, '[]'::jsonb, '', 'extra', NULL, FALSE),
+  ('b1000001-0001-4000-8000-000000000010', 'authorIds', 'Authors', '', 'select', TRUE, TRUE, 11, '[]'::jsonb, '', 'extra', NULL, FALSE),
+  ('b1000001-0001-4000-8000-000000000011', 'reviewerIds', 'Reviewers', '', 'select', TRUE, TRUE, 12, '[]'::jsonb, '', 'extra', NULL, FALSE),
+  ('b1000001-0001-4000-8000-000000000012', 'thesisFile', 'Thesis PDF', '', 'file', TRUE, TRUE, 13, '[]'::jsonb, '', 'extra', NULL, FALSE)
+ON CONFLICT (field_key) DO NOTHING;
+
+CREATE TABLE workflow_steps (
+  id UUID PRIMARY KEY,
+  sort_order INT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('reviewer', 'library_staff', 'director')),
+  label TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE submission_steps (
+  id UUID PRIMARY KEY,
+  submission_id UUID NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+  sort_order INT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('reviewer', 'library_staff', 'director')),
+  label TEXT NOT NULL DEFAULT '',
+  UNIQUE (submission_id, sort_order)
+);
+
+CREATE TABLE user_groups (
+  id UUID PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('student', 'reviewer')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE user_group_members (
+  group_id UUID NOT NULL REFERENCES user_groups(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+  PRIMARY KEY (group_id, user_id)
+);
+
+CREATE TABLE reviewer_group_grants (
+  reviewer_group_id UUID NOT NULL REFERENCES user_groups(id) ON DELETE CASCADE,
+  student_group_id UUID NOT NULL REFERENCES user_groups(id) ON DELETE CASCADE,
+  PRIMARY KEY (reviewer_group_id, student_group_id)
+);
+
+INSERT INTO workflow_steps (id, sort_order, role, label) VALUES
+  ('c1000001-0001-4000-8000-000000000001', 1, 'reviewer', 'Review'),
+  ('c1000001-0001-4000-8000-000000000002', 2, 'library_staff', 'Library'),
+  ('c1000001-0001-4000-8000-000000000003', 3, 'director', 'Director');

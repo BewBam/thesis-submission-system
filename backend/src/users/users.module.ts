@@ -3,11 +3,12 @@ import { PassportModule } from "@nestjs/passport";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { PermissionsGuard } from "../auth/permissions.guard";
 import { PermissionsService } from "./permissions.service";
+import { WorkflowModule } from "../workflow/workflow.module";
 import { UsersController } from "./users.controller";
 import { UsersService } from "./users.service";
 
 @Module({
-  imports: [PassportModule.register({ defaultStrategy: "jwt" })],
+  imports: [PassportModule.register({ defaultStrategy: "jwt" }), WorkflowModule],
   controllers: [UsersController],
   providers: [UsersService, PermissionsService, JwtAuthGuard, PermissionsGuard],
   exports: [UsersService, PermissionsService]

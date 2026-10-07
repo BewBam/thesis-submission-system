@@ -1,5 +1,5 @@
 import { Transform } from "class-transformer";
-import { ArrayNotEmpty, IsArray, IsNotEmpty, IsOptional, IsString } from "class-validator";
+import { IsArray, IsNotEmpty, IsOptional, IsString } from "class-validator";
 import { ThesisMetadataFieldsDto } from "./thesis-metadata-fields.dto";
 
 function parseAuthorIds(value: unknown): string[] {
@@ -32,37 +32,37 @@ function parseReviewerIds(value: unknown): string[] {
 }
 
 export class CreateSubmissionDto extends ThesisMetadataFieldsDto {
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  titleVi!: string;
+  titleVi?: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  titleEn!: string;
+  titleEn?: string;
 
+  @IsOptional()
   @Transform(({ value }) => parseAuthorIds(value))
   @IsArray()
-  @ArrayNotEmpty()
   @IsString({ each: true })
-  authorIds!: string[];
+  authorIds?: string[];
 
+  @IsOptional()
   @Transform(({ value }) => parseReviewerIds(value))
   @IsArray()
-  @ArrayNotEmpty()
   @IsString({ each: true })
-  reviewerIds!: string[];
+  reviewerIds?: string[];
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  thesisAdvisors!: string;
+  thesisAdvisors?: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  major!: string;
+  major?: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  thesisYear!: string;
+  thesisYear?: string;
 
   @IsOptional()
   @IsString()
@@ -92,7 +92,7 @@ export class CreateSubmissionDto extends ThesisMetadataFieldsDto {
   @IsNotEmpty()
   studentId!: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  submissionPeriodId!: string;
+  submissionPeriodId?: string;
 }

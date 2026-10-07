@@ -1410,5 +1410,38 @@ export const catalog = {
   "Body for director decision.": {
     en: "Body for director decision.",
     vi: "Nội dung thư cho quyết định của giám đốc."
-  }
+  },
+  "Approval workflow": { en: "Approval workflow", vi: "Quy trình duyệt" },
+  "User groups": { en: "User groups", vi: "Nhóm người dùng" },
+  "Add step": { en: "Add step", vi: "Thêm bước" },
+  "Save workflow": { en: "Save workflow", vi: "Lưu quy trình" },
+  "Workflow saved": { en: "Workflow saved", vi: "Đã lưu quy trình" },
+  "Step label": { en: "Step label", vi: "Tên bước" },
+  Up: { en: "Up", vi: "Lên" },
+  Down: { en: "Down", vi: "Xuống" },
+  "Create group": { en: "Create group", vi: "Tạo nhóm" },
+  "Group name": { en: "Group name", vi: "Tên nhóm" },
+  Kind: { en: "Kind", vi: "Loại" },
+  "Assign users": { en: "Assign users", vi: "Gán người dùng" },
+  "Group members saved": { en: "Group members saved", vi: "Đã lưu thành viên nhóm" },
+  "Reviewer grants saved": { en: "Reviewer grants saved", vi: "Đã lưu quyền phản biện" },
+  "Student groups this reviewer group may review": {
+    en: "Student groups this reviewer group may review",
+    vi: "Nhóm sinh viên mà nhóm phản biện này được duyệt"
+  },
+  "Add, remove, and reorder approval steps. Each step uses an existing role. A role can be left out or used more than once. Theses already submitted keep the steps they had when they were submitted.":
+    {
+      en: "Add, remove, and reorder approval steps. Each step uses an existing role. A role can be left out or used more than once. Theses already submitted keep the steps they had when they were submitted.",
+      vi: "Thêm, xóa và sắp xếp các bước duyệt. Mỗi bước dùng một vai trò sẵn có. Một vai trò có thể không xuất hiện hoặc xuất hiện nhiều lần. Bài đã nộp giữ nguyên các bước lúc nộp."
+    },
+  "Create student and reviewer groups, assign users, then choose which student groups a reviewer group may review. Until a grant exists, reviewer selection and queues stay unchanged.":
+    {
+      en: "Create student and reviewer groups, assign users, then choose which student groups a reviewer group may review. Until a grant exists, reviewer selection and queues stay unchanged.",
+      vi: "Tạo nhóm sinh viên và phản biện, gán người dùng, rồi chọn nhóm sinh viên mà nhóm phản biện được duyệt. Khi chưa có quyền cấp, cách chọn phản biện và hàng đợi giữ như hiện tại."
+    },
+  "Configure every field on the student form. Turn a field off to hide it, or change its input type. Disabled fields are not required when submitting.":
+    {
+      en: "Configure every field on the student form. Turn a field off to hide it, or change its input type. Disabled fields are not required when submitting.",
+      vi: "Cấu hình mọi trường trên form sinh viên. Tắt để ẩn, hoặc đổi kiểu nhập. Trường tắt không bắt buộc khi nộp."
+    }
 };

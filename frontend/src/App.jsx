@@ -78,6 +78,36 @@ const THESIS_YEAR_OPTIONS = Array.from({ length: 12 }, (_, index) => {
   return { value: String(year), label: String(year) };
 });
 
+const STRUCTURAL_FORM_KEYS = new Set([
+  "archiveFacultyId",
+  "archiveSemesterId",
+  "submissionPeriodId",
+  "email",
+  "titleVi",
+  "titleEn",
+  "thesisAdvisors",
+  "major",
+  "thesisYear",
+  "authorIds",
+  "reviewerIds",
+  "thesisFile"
+]);
+
+const STRUCTURAL_NATIVE_TYPE = {
+  archiveFacultyId: "select",
+  archiveSemesterId: "select",
+  submissionPeriodId: "select",
+  email: "text",
+  titleVi: "text",
+  titleEn: "text",
+  thesisAdvisors: "text",
+  major: "text",
+  thesisYear: "year",
+  authorIds: "select",
+  reviewerIds: "select",
+  thesisFile: "file"
+};
+
 const DEFAULT_PUBLISHER = "Ho Chi Minh City University of Technology";
 const LANGUAGE_OPTIONS = [
   { value: "vie", label: "Vietnamese (vie)" },
@@ -646,6 +676,7 @@ function App() {
   const [editingSubmissionId, setEditingSubmissionId] = useState(null);
   const [editingSubmissionStatus, setEditingSubmissionStatus] = useState(null);
   const [submissionFormFields, setSubmissionFormFields] = useState([]);
+  const [formFieldsLoaded, setFormFieldsLoaded] = useState(false);
   const [isSavingDraft, setIsSavingDraft] = useState(false);
 
   useEffect(() => {
@@ -837,10 +868,63 @@ function App() {
   const configurableFormFields = useMemo(
     () =>
       (Array.isArray(submissionFormFields) ? submissionFormFields : []).filter(
-        (field) => field.fieldKey !== "author" && field.fieldKey !== "title"
+        (field) =>
+          field.fieldKey !== "author" &&
+          field.fieldKey !== "title" &&
+          !STRUCTURAL_FORM_KEYS.has(field.fieldKey)
       ),
     [submissionFormFields]
   );
+  const structuralField = (key) =>
+    (Array.isArray(submissionFormFields) ? submissionFormFields : []).find((field) => field.fieldKey === key);
+  const showNative = (key) => {
+    if (!formFieldsLoaded) {
+      return true;
+    }
+    const field = structuralField(key);
+    return Boolean(field && field.inputType === STRUCTURAL_NATIVE_TYPE[key]);
+  };
+  const structuralRequired = (key, fallback = true) => {
+    if (!formFieldsLoaded) {
+      return fallback;
+    }
+    const field = structuralField(key);
+    return Boolean(field?.required);
+  };
+  const renderAlternateField = (key) => {
+    if (!formFieldsLoaded) {
+      return null;
+    }
+    const field = structuralField(key);
+    if (!field || field.inputType === STRUCTURAL_NATIVE_TYPE[key] || field.inputType === "file") {
+      return null;
+    }
+    const label = fieldDisplayLabel(field, t);
+    const rules = field.required ? [{ required: true, message: t("{{label}} is required", { label }) }] : [];
+    let control = <Input placeholder={field.defaultValue || label} />;
+    if (field.inputType === "textarea") {
+      control = <TextArea rows={3} />;
+    } else if (field.inputType === "select" || field.inputType === "year") {
+      control = (
+        <Select
+          options={
+            field.inputType === "year"
+              ? THESIS_YEAR_OPTIONS
+              : (field.options || []).map((option) => ({
+                  value: option.value,
+                  label: optionDisplayLabel(option, t)
+                }))
+          }
+          placeholder={label}
+        />
+      );
+    }
+    return (
+      <Form.Item key={field.id || key} label={label} name={key} rules={rules}>
+        {control}
+      </Form.Item>
+    );
+  };
 
   const loadSubmissionFormFields = async (token) => {
     try {
@@ -861,11 +945,14 @@ function App() {
       });
       const payload = await parseResponse(response);
       if (!response.ok || !Array.isArray(payload)) {
+        setFormFieldsLoaded(true);
         return [];
       }
       setSubmissionFormFields(payload);
+      setFormFieldsLoaded(true);
       return payload;
     } catch {
+      setFormFieldsLoaded(true);
       return [];
     }
   };
@@ -1487,7 +1574,8 @@ function App() {
   const loadReviewers = async () => {
     setIsLoadingReviewers(true);
     try {
-      const response = await fetch("/api/users?role=reviewer", {
+      const forStudent = actingStudentId ? `&forStudent=${encodeURIComponent(actingStudentId)}` : "";
+      const response = await fetch(`/api/users?role=reviewer${forStudent}`, {
         headers: { ...authHeaders(auth?.token) }
       });
       const payload = await parseResponse(response);
@@ -1631,11 +1719,19 @@ function App() {
       return;
     }
     if (auth.user.role === "student" || auth.user.role === "admin") {
-      void loadReviewers();
       void loadStudents();
       void loadArchiveFaculties();
     }
   }, [auth]);
+
+  useEffect(() => {
+    if (!auth?.user) {
+      return;
+    }
+    if (auth.user.role === "student" || auth.user.role === "admin") {
+      void loadReviewers();
+    }
+  }, [auth, actingStudentId]);
 
   useEffect(() => {
     if (auth?.user?.role === "student") {
@@ -1813,17 +1909,19 @@ function App() {
 
   const buildSubmissionFormData = (values, { requireThesisFile = false } = {}) => {
     const formData = new FormData();
-    const authorIds = Array.isArray(values.authorIds) ? values.authorIds.filter(Boolean) : [];
-    const studentId =
-      auth.user.role === "admin" ? values.studentId || authorIds[0] : auth.user.id;
-    const reviewerIds = Array.isArray(values.reviewerIds) ? values.reviewerIds : [];
+    const authorsNative = showNative("authorIds");
+    const reviewersNative = showNative("reviewerIds");
+    const pickedAuthors = Array.isArray(values.authorIds) ? values.authorIds.filter(Boolean) : [];
+    const studentId = auth.user.role === "admin" ? values.studentId || pickedAuthors[0] : auth.user.id;
+    const authorIds = authorsNative ? pickedAuthors : studentId ? [studentId] : [];
+    const reviewerIds = reviewersNative && Array.isArray(values.reviewerIds) ? values.reviewerIds : [];
     if (!studentId) {
       throw new Error("Please select a student author");
     }
-    if (authorIds.length === 0) {
+    if (authorsNative && structuralRequired("authorIds") && authorIds.length === 0) {
       throw new Error("Please search and select at least one student author");
     }
-    if (!authorIds.includes(studentId)) {
+    if (authorsNative && authorIds.length > 0 && !authorIds.includes(studentId)) {
       throw new Error("The submitting student must be included in the author list");
     }
     formData.append("studentId", studentId);
@@ -1869,6 +1967,15 @@ function App() {
       metadata.dateIssued = String(values.thesisYear).trim();
       formData.append("dateIssued", metadata.dateIssued);
     }
+    if (!authorsNative && values.authorIds != null && !Array.isArray(values.authorIds) && String(values.authorIds).trim()) {
+      metadata.authorIds = String(values.authorIds).trim();
+    }
+    if (!reviewersNative && values.reviewerIds != null && !Array.isArray(values.reviewerIds) && String(values.reviewerIds).trim()) {
+      metadata.reviewerIds = String(values.reviewerIds).trim();
+    }
+    if (!showNative("thesisFile") && typeof values.thesisFile === "string" && values.thesisFile.trim()) {
+      metadata.thesisFile = values.thesisFile.trim();
+    }
     formData.append("metadata", JSON.stringify(metadata));
     formData.append("authorIds", JSON.stringify(authorIds));
     formData.append("reviewerIds", JSON.stringify(reviewerIds));
@@ -1881,7 +1988,7 @@ function App() {
         return null;
       }
       formData.append("thesisFile", thesisFile);
-    } else if (requireThesisFile) {
+    } else if (requireThesisFile && showNative("thesisFile") && structuralRequired("thesisFile", true)) {
       throw new Error("Please upload a thesis PDF file");
     }
     return formData;
@@ -2285,19 +2392,19 @@ function App() {
       if (!formData) {
         return;
       }
-      if (!values.titleVi?.trim()) {
+      if (structuralRequired("titleVi") && !values.titleVi?.trim()) {
         throw new Error("Vietnamese thesis title is required");
       }
-      if (!values.titleEn?.trim()) {
+      if (structuralRequired("titleEn") && !values.titleEn?.trim()) {
         throw new Error("English thesis title is required");
       }
-      if (!values.thesisAdvisors?.trim()) {
+      if (structuralRequired("thesisAdvisors") && !values.thesisAdvisors?.trim()) {
         throw new Error("Advisor(s) is required");
       }
-      if (!values.major?.trim()) {
+      if (structuralRequired("major") && !values.major?.trim()) {
         throw new Error("Major is required");
       }
-      if (!values.thesisYear) {
+      if (structuralRequired("thesisYear") && !values.thesisYear) {
         throw new Error("Year is required");
       }
       for (const field of configurableFormFields) {
@@ -2308,11 +2415,14 @@ function App() {
           throw new Error(t("{{label}} is required", { label: fieldDisplayLabel(field, t) }));
         }
       }
-      if (!values.submissionPeriodId) {
+      if (structuralRequired("submissionPeriodId") && !values.submissionPeriodId) {
         throw new Error("Please select a submission period");
       }
       const reviewerIds = Array.isArray(values.reviewerIds) ? values.reviewerIds : [];
-      if (reviewerIds.length === 0) {
+      if (showNative("reviewerIds") && structuralRequired("reviewerIds") && reviewerIds.length === 0) {
+        throw new Error("Please select at least one reviewer");
+      }
+      if (!showNative("reviewerIds") && structuralRequired("reviewerIds") && !String(values.reviewerIds ?? "").trim()) {
         throw new Error("Please select at least one reviewer");
       }
 
@@ -2324,7 +2434,7 @@ function App() {
           body: formData
         });
       } else {
-        if (!values.thesisFile?.[0]?.originFileObj) {
+        if (showNative("thesisFile") && structuralRequired("thesisFile") && !values.thesisFile?.[0]?.originFileObj) {
           throw new Error("Please upload a thesis PDF file");
         }
         response = await fetch("/api/submissions", {
@@ -2556,7 +2666,7 @@ function App() {
     setLibraryRejectReason("");
   };
 
-  const buildDirectorArchiveColumns = (loadingId, onArchive, onReject) => [
+  const buildDirectorArchiveColumns = (loadingId, onArchive, onApprove, onReject) => [
     {
       title: t("Title"),
       dataIndex: "title",
@@ -2602,7 +2712,11 @@ function App() {
       render: (_value, record) => (
         <Space>
           <Button type="link" size="small" onClick={() => openQueueSubmissionDetail(record)}>{t("Detail")}</Button>
-          <Button type="primary" loading={loadingId === record.id} onClick={() => onArchive(record.id)}>{t("Archive")}</Button>
+          {record.current_step_is_last === false ? (
+            <Button type="primary" loading={loadingId === record.id} onClick={() => onApprove(record.id)}>{t("Approve")}</Button>
+          ) : (
+            <Button type="primary" loading={loadingId === record.id} onClick={() => onArchive(record.id)}>{t("Archive")}</Button>
+          )}
           <Button danger loading={loadingId === record.id} onClick={() => onReject(record.id)}>{t("Reject")}</Button>
         </Space>
       )
@@ -2897,10 +3011,11 @@ function App() {
                         <Input />
                       </Form.Item>
                     ) : null}
+                    {showNative("archiveFacultyId") ? (
                     <Form.Item
                       label={t("Faculty")}
                       name="archiveFacultyId"
-                      rules={[{ required: true, message: t("This student is not assigned to a faculty") }]}
+                      rules={structuralRequired("archiveFacultyId") ? [{ required: true, message: t("This student is not assigned to a faculty") }] : []}
                     >
                       <Select
                         placeholder={t("Student faculty")}
@@ -2912,10 +3027,12 @@ function App() {
                         }
                       />
                     </Form.Item>
+                    ) : renderAlternateField("archiveFacultyId")}
+                    {showNative("archiveSemesterId") ? (
                     <Form.Item
                       label={t("Semester")}
                       name="archiveSemesterId"
-                      rules={[{ required: true, message: t("Please select a semester") }]}
+                      rules={structuralRequired("archiveSemesterId") ? [{ required: true, message: t("Please select a semester") }] : []}
                     >
                       <Select
                         showSearch
@@ -2929,10 +3046,12 @@ function App() {
                         notFoundContent={isLoadingArchiveSemesters ? t("Loading...") : t("Select a faculty first")}
                       />
                     </Form.Item>
+                    ) : renderAlternateField("archiveSemesterId")}
+                    {showNative("submissionPeriodId") ? (
                     <Form.Item
                       label={t("Submission period")}
                       name="submissionPeriodId"
-                      rules={[{ required: true, message: t("Please select a submission period") }]}
+                      rules={structuralRequired("submissionPeriodId") ? [{ required: true, message: t("Please select a submission period") }] : []}
                     >
                       <Select
                         showSearch
@@ -2953,14 +3072,15 @@ function App() {
                         }
                       />
                     </Form.Item>
+                    ) : renderAlternateField("submissionPeriodId")}
 
                     <Divider style={{ margin: "8px 0" }} />
-                    {isAdminActor ? (
+                    {isAdminActor && showNative("authorIds") ? (
                     <Form.Item
                       label={t("Authors")}
                       name="authorIds"
                       extra={t("Search by student name or username. Not filled with the admin account.")}
-                      rules={[{ required: true, message: t("Please search and select at least one student author") }]}
+                      rules={structuralRequired("authorIds") ? [{ required: true, message: t("Please search and select at least one student author") }] : []}
                     >
                       <Select
                         mode="multiple"
@@ -2976,39 +3096,50 @@ function App() {
                         notFoundContent={isLoadingStudents ? t("Loading...") : t("No students found")}
                       />
                     </Form.Item>
-                    ) : null}
+                    ) : isAdminActor ? renderAlternateField("authorIds") : null}
                     <fieldset
                       disabled={isFormReadOnly}
                       style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}
                     >
+                    {showNative("email") ? (
                     <Form.Item label={t("Email")} name="email">
                       <Input disabled placeholder="username@hcmut.edu.vn" />
                     </Form.Item>
+                    ) : renderAlternateField("email")}
+                    {showNative("titleVi") ? (
                     <Form.Item
                       label={t("Thesis title (Vietnamese)")}
                       name="titleVi"
-                      rules={[{ required: true, message: t("Vietnamese title is required") }]}
+                      rules={structuralRequired("titleVi") ? [{ required: true, message: t("Vietnamese title is required") }] : []}
                     >
                       <Input placeholder={t("Tên luận văn / luận án (tiếng Việt)")} />
                     </Form.Item>
+                    ) : renderAlternateField("titleVi")}
+                    {showNative("titleEn") ? (
                     <Form.Item
                       label={t("Thesis title (English)")}
                       name="titleEn"
-                      rules={[{ required: true, message: t("English title is required") }]}
+                      rules={structuralRequired("titleEn") ? [{ required: true, message: t("English title is required") }] : []}
                     >
                       <Input placeholder={t("Thesis title in English")} />
                     </Form.Item>
+                    ) : renderAlternateField("titleEn")}
+                    {showNative("thesisAdvisors") ? (
                     <Form.Item
                       label={t("Advisor(s)")}
                       name="thesisAdvisors"
-                      rules={[{ required: true, message: t("Advisor(s) is required") }]}
+                      rules={structuralRequired("thesisAdvisors") ? [{ required: true, message: t("Advisor(s) is required") }] : []}
                     >
                       <Input placeholder={t("e.g. Assoc. Prof. Nguyen Van A; Dr. Tran Van B")} />
                     </Form.Item>
-                    <Form.Item label={t("Major")} name="major" rules={[{ required: true, message: t("Major is required") }]}>
+                    ) : renderAlternateField("thesisAdvisors")}
+                    {showNative("major") ? (
+                    <Form.Item label={t("Major")} name="major" rules={structuralRequired("major") ? [{ required: true, message: t("Major is required") }] : []}>
                       <Input placeholder={t("e.g. Computer Science")} />
                     </Form.Item>
-                    <Form.Item label={t("Year")} name="thesisYear" rules={[{ required: true, message: t("Year is required") }]}>
+                    ) : renderAlternateField("major")}
+                    {showNative("thesisYear") ? (
+                    <Form.Item label={t("Year")} name="thesisYear" rules={structuralRequired("thesisYear") ? [{ required: true, message: t("Year is required") }] : []}>
                       <Select
                         options={THESIS_YEAR_OPTIONS}
                         placeholder={t("Graduation / submission year")}
@@ -3020,11 +3151,12 @@ function App() {
                         }}
                       />
                     </Form.Item>
-                    {!isAdminActor ? (
+                    ) : renderAlternateField("thesisYear")}
+                    {!isAdminActor && showNative("authorIds") ? (
                     <Form.Item
                       label={t("Authors")}
                       name="authorIds"
-                      rules={[{ required: true, message: t("Please select at least one author") }]}
+                      rules={structuralRequired("authorIds") ? [{ required: true, message: t("Please select at least one author") }] : []}
                     >
                       <Select
                         mode="multiple"
@@ -3038,11 +3170,12 @@ function App() {
                         notFoundContent={isLoadingStudents ? t("Loading...") : t("No students found")}
                       />
                     </Form.Item>
-                    ) : null}
+                    ) : !isAdminActor ? renderAlternateField("authorIds") : null}
+                    {showNative("reviewerIds") ? (
                     <Form.Item
                       label={t("Reviewers")}
                       name="reviewerIds"
-                      rules={[{ required: true, message: t("Please select at least one reviewer") }]}
+                      rules={structuralRequired("reviewerIds") ? [{ required: true, message: t("Please select at least one reviewer") }] : []}
                     >
                       <Select
                         mode="multiple"
@@ -3056,6 +3189,7 @@ function App() {
                         notFoundContent={isLoadingReviewers ? t("Loading...") : t("No reviewers found")}
                       />
                     </Form.Item>
+                    ) : renderAlternateField("reviewerIds")}
                     {configurableFormFields.map((field) => {
                       const label = fieldDisplayLabel(field, t);
                       const rules = field.required
@@ -3092,6 +3226,7 @@ function App() {
                         </Form.Item>
                       );
                     })}
+                    {showNative("thesisFile") ? (
                     <Form.Item
                       label={t("Thesis PDF")}
                       name="thesisFile"
@@ -3099,7 +3234,7 @@ function App() {
                       getValueFromEvent={(event) => event?.fileList || []}
                       rules={[
                         {
-                          required: !editingSubmissionId,
+                          required: !editingSubmissionId && structuralRequired("thesisFile"),
                           message: t("Please upload thesis PDF")
                         }
                       ]}
@@ -3127,6 +3262,7 @@ function App() {
                         <p className="ant-upload-text">{t("Click or drag PDF thesis file here (max {{size}} MB)", { size: thesisMaxFileSizeMb })}</p>
                       </Upload.Dragger>
                     </Form.Item>
+                    ) : renderAlternateField("thesisFile")}
 
                     <Space wrap>
                       {!isFormReadOnly ? (
@@ -3135,7 +3271,12 @@ function App() {
                             onClick={() => void handleSaveDraft(submissionForm.getFieldsValue())}
                             loading={isSavingDraft}
                             disabled={
-                              (!periodSelected && !editingSubmissionId) || !canSaveCurrentDraft || isFormReadOnly
+                              (showNative("submissionPeriodId") &&
+                                structuralRequired("submissionPeriodId") &&
+                                !periodSelected &&
+                                !editingSubmissionId) ||
+                              !canSaveCurrentDraft ||
+                              isFormReadOnly
                             }
                           >{t("Save draft")}</Button>
                           <Button
@@ -3455,7 +3596,7 @@ function App() {
                           libraryActionLoadingId,
                           (id) => submitLibraryAction(id, "approve"),
                           openLibraryRejectModal,
-                          "Approve"
+                          t("Approve")
                         )}
                         loading={isLoadingLibraryQueue}
                         pagination={{ pageSize: 5 }}
@@ -3483,6 +3624,7 @@ function App() {
                         columns={buildDirectorArchiveColumns(
                           directorActionLoadingId,
                           (id) => submitDirectorArchive(id),
+                          (id) => submitStageAction("director-action", id, "approve", undefined, t("Approved")),
                           (id) => openDirectorRejectModal(id)
                         )}
                         loading={isLoadingDirectorQueue}
