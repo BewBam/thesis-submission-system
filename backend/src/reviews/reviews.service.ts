@@ -82,7 +82,10 @@ export class ReviewsService {
        LEFT JOIN faculties f ON f.id = sem.faculty_id
        LEFT JOIN submission_files sf ON sf.submission_id = s.id
        WHERE r.reviewer_id = $1
-         AND s.status = 'reviewing'
+         AND (
+           s.status = 'reviewing'
+           OR (s.status = 'rejected' AND r.decision = 'reject')
+         )
          AND ${this.groups.reviewerCanSeeStudentSql("$1")}
        GROUP BY s.id,
                 s.title,

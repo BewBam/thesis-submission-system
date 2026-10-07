@@ -121,6 +121,8 @@ describe("Approve and reject", () => {
     const row = await rowOf(student, id);
     expect(row.status).toBe("rejected");
     expect(row.reviews[0].comment).toBe("Scope is too broad");
+    const mine = await http().get("/reviews/my-queue").set("Authorization", `Bearer ${reviewerToken}`);
+    expect(mine.body.some((item: { id: string; my_decision: string }) => item.id === id && item.my_decision === "reject")).toBe(true);
     const queue = await http().get("/reviews/library-queue").set("Authorization", `Bearer ${libraryToken}`);
     expect(queue.body.some((item: { id: string }) => item.id === id)).toBe(false);
   });
