@@ -27,7 +27,7 @@ import {
   THESIS_METADATA_SELECT
 } from "./submission-metadata";
 import { SubmissionFormFieldsService } from "./submission-form-fields.service";
-import { THESIS_MAX_FILE_SIZE_BYTES, THESIS_MAX_FILE_SIZE_MB, isThesisPdfUpload } from "./submission-limits";
+import { THESIS_MAX_FILE_SIZE_MB, isThesisPdfUpload } from "./submission-limits";
 import {
   assertStudentSubmissionCapability,
   assertSubmissionOwnership,
@@ -103,13 +103,29 @@ export class SubmissionsService {
     return this.formFieldsService.resolveMetadataValues(dto, options);
   }
 
+  async getThesisUploadLimit(): Promise<{ maxFileSizeMb: number }> {
+    return { maxFileSizeMb: await this.thesisMaxFileSizeMb() };
+  }
+
+  private async thesisMaxFileSizeMb(): Promise<number> {
+    const result = await this.db.query<{ value: string }>(
+      `SELECT value FROM system_settings WHERE key = 'thesis_max_file_size_mb' LIMIT 1`
+    );
+    const parsed = Number.parseInt(String(result.rows[0]?.value ?? "").trim(), 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return THESIS_MAX_FILE_SIZE_MB;
+    }
+    return parsed;
+  }
+
   private async assertThesisFileValid(thesisFile: UploadedFile) {
     if (!isThesisPdfUpload(thesisFile)) {
       throw new BadRequestException("Thesis file must be a PDF");
     }
+    const maxMb = await this.thesisMaxFileSizeMb();
     const fileStat = await stat(thesisFile.path);
-    if (fileStat.size > THESIS_MAX_FILE_SIZE_BYTES) {
-      throw new BadRequestException(`Thesis PDF must be at most ${THESIS_MAX_FILE_SIZE_MB} MB`);
+    if (fileStat.size > maxMb * 1024 * 1024) {
+      throw new BadRequestException(`Thesis PDF must be at most ${maxMb} MB`);
     }
   }
 
@@ -138,20 +154,11 @@ export class SubmissionsService {
 
     for (const row of result.rows) {
       const isOwnSubmit = String(row.student_id) === String(studentId);
-      const status = row.status === "reject" ? "rejected" : row.status;
 
       if (excludeSubmissionId && row.id === excludeSubmissionId) {
         if (!isOwnSubmit) {
           throw new BadRequestException(
             "Only the submitting student can resubmit this thesis"
-          );
-        }
-        if (status === "rejected" || status === "approved") {
-          continue;
-        }
-        if (status === "reviewing") {
-          throw new BadRequestException(
-            "This thesis has already been submitted and cannot be submitted again unless it was rejected or returned for revision"
           );
         }
         continue;
@@ -938,7 +945,11 @@ export class SubmissionsService {
       if (dto.studentId && dto.studentId !== row.student_id) {
         throw new BadRequestException("Cannot change the submitting student");
       }
-      resubmit = row.status === "rejected" || row.status === "reject" || row.status === "approved";
+      resubmit =
+        row.status === "rejected" ||
+        row.status === "reject" ||
+        row.status === "approved" ||
+        row.status === "reviewing";
       await this.assertStudentSubmissionAction(client, submissionId, row.student_id, "submit");
 
       if (row.status === "draft") {
@@ -1001,7 +1012,12 @@ export class SubmissionsService {
       let periodContext;
       if (row.status === "draft") {
         periodContext = await this.submissionPeriodsService.resolveOpenPeriod(periodId);
-      } else if (row.status === "rejected" || row.status === "reject" || row.status === "approved") {
+      } else if (
+        row.status === "rejected" ||
+        row.status === "reject" ||
+        row.status === "approved" ||
+        row.status === "reviewing"
+      ) {
         const meta = await client.query<{
           university_name: string;
           faculty_id: string;

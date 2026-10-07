@@ -23,6 +23,33 @@ type SessionCache = {
 /** DSpace JWT sessions are typically short-lived; refresh proactively. */
 const TOKEN_TTL_MS = 25 * 60 * 1000;
 
+/**
+ * Browser base for the DSpace Angular UI.
+ * REST is usually `…/server` (often port 8080). The UI is the same host without `/server`,
+ * and port 4000 when the API is on the default REST port 8080.
+ */
+export function dspaceUiBaseFromApi(apiBase: string): string {
+  const trimmed = String(apiBase || "").trim().replace(/\/+$/, "");
+  if (!trimmed) {
+    return "";
+  }
+  const withoutServer = trimmed.replace(/\/server$/i, "");
+  let url: URL;
+  try {
+    url = new URL(withoutServer);
+  } catch {
+    return withoutServer;
+  }
+  if (url.hostname === "host.docker.internal") {
+    url.hostname = "localhost";
+  }
+  if (url.port === "8080") {
+    url.port = "4000";
+  }
+  const pathName = url.pathname.replace(/\/+$/, "");
+  return `${url.origin}${pathName && pathName !== "/" ? pathName : ""}`;
+}
+
 @Injectable()
 export class DspaceProvisionerService {
   private readonly db = createPgPool();
@@ -83,6 +110,10 @@ export class DspaceProvisionerService {
       );
     }
     return normalized;
+  }
+
+  async getUiBaseUrl(): Promise<string> {
+    return dspaceUiBaseFromApi(await this.getBaseUrl());
   }
 
   /** Configured when base URL exists and either user/password or a static token is set. */

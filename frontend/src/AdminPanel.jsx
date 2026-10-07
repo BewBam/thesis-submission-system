@@ -94,6 +94,21 @@ function sortEmailTechnical(items) {
   return [...items].sort((a, b) => (rank.get(a.key) ?? 99) - (rank.get(b.key) ?? 99));
 }
 
+const BUILTIN_FORM_FIELDS = [
+  { id: "builtin-faculty", fieldKey: "archiveFacultyId", labelKey: "Faculty", inputType: "select", builtin: true },
+  { id: "builtin-semester", fieldKey: "archiveSemesterId", labelKey: "Semester", inputType: "select", builtin: true },
+  { id: "builtin-period", fieldKey: "submissionPeriodId", labelKey: "Submission period", inputType: "select", builtin: true },
+  { id: "builtin-email", fieldKey: "email", labelKey: "Email", inputType: "text", builtin: true },
+  { id: "builtin-title-vi", fieldKey: "titleVi", labelKey: "Thesis title (Vietnamese)", inputType: "text", builtin: true },
+  { id: "builtin-title-en", fieldKey: "titleEn", labelKey: "Thesis title (English)", inputType: "text", builtin: true },
+  { id: "builtin-advisors", fieldKey: "thesisAdvisors", labelKey: "Advisor(s)", inputType: "text", builtin: true },
+  { id: "builtin-major", fieldKey: "major", labelKey: "Major", inputType: "text", builtin: true },
+  { id: "builtin-year", fieldKey: "thesisYear", labelKey: "Year", inputType: "year", builtin: true },
+  { id: "builtin-authors", fieldKey: "authorIds", labelKey: "Authors", inputType: "select", builtin: true },
+  { id: "builtin-reviewers", fieldKey: "reviewerIds", labelKey: "Reviewers", inputType: "select", builtin: true },
+  { id: "builtin-pdf", fieldKey: "thesisFile", labelKey: "Thesis PDF", inputType: "file", builtin: true }
+];
+
 function renderSettingControl(item, t) {
   if (item.key === "login_method") {
     return (
@@ -913,15 +928,15 @@ export default function AdminPanel({
       <Table
         rowKey="id"
         loading={loadingFormFields}
-        dataSource={formFields}
+        dataSource={[...BUILTIN_FORM_FIELDS, ...formFields]}
         pagination={false}
-        scroll={{ x: 1100 }}
+        scroll={{ x: 1280 }}
         columns={[
           {
             title: t("Label"),
             dataIndex: "label",
             width: 160,
-            render: (_value, row) => fieldDisplayLabel(row, t)
+            render: (_value, row) => (row.builtin ? t(row.labelKey) : fieldDisplayLabel(row, t))
           },
           { title: t("Key"), dataIndex: "fieldKey", width: 140, render: (v) => <Text code>{v}</Text> },
           {
@@ -941,7 +956,11 @@ export default function AdminPanel({
             dataIndex: "required",
             width: 100,
             render: (v, row) => (
-              <Switch checked={v} onChange={(checked) => void toggleFormFieldFlag(row, { required: checked })} />
+              <Switch
+                checked={row.builtin ? true : v}
+                disabled={row.builtin}
+                onChange={(checked) => void toggleFormFieldFlag(row, { required: checked })}
+              />
             )
           },
           {
@@ -949,19 +968,27 @@ export default function AdminPanel({
             dataIndex: "enabled",
             width: 100,
             render: (v, row) => (
-              <Switch checked={v} onChange={(checked) => void toggleFormFieldFlag(row, { enabled: checked })} />
+              <Switch
+                checked={row.builtin ? true : v}
+                disabled={row.builtin}
+                onChange={(checked) => void toggleFormFieldFlag(row, { enabled: checked })}
+              />
             )
           },
           {
             title: t("System"),
             dataIndex: "systemLocked",
             width: 90,
-            render: (v) => (v ? <Tag>{t("locked")}</Tag> : <Tag color="blue">{t("custom")}</Tag>)
+            render: (v, row) =>
+              row.builtin || v ? <Tag>{t("locked")}</Tag> : <Tag color="blue">{t("custom")}</Tag>
           },
           {
             title: t("Actions"),
-            width: 160,
-            render: (_, row) => (
+            width: 220,
+            render: (_, row) =>
+              row.builtin ? (
+                <Text type="secondary">{t("Always on the form")}</Text>
+              ) : (
               <Space>
                 <Button size="small" onClick={() => openEditFormField(row)}>{t("Edit")}</Button>
                 <Button
@@ -971,7 +998,7 @@ export default function AdminPanel({
                   onClick={() => deleteFormField(row)}
                 >{t("Delete")}</Button>
               </Space>
-            )
+              )
           }
         ]}
       />

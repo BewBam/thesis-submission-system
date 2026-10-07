@@ -31,7 +31,7 @@ import dayjs from "dayjs";
 import { translateApiMessage } from "./i18n/api";
 import { useI18n } from "./i18n/I18nProvider";
 import { countPhrase, formatDateTime, statusText } from "./i18n/labels";
-const { Title, Paragraph, Text } = Typography;
+const { Title, Paragraph, Text, Link } = Typography;
 
 function toIsoString(value) {
   if (!value) {
@@ -213,11 +213,24 @@ function buildDspaceTreeData(nodes, options = {}) {
       return {
         key: node.dspaceId,
         isLeaf: isCollection || nested.length === 0,
-        selectable: collectionsOnly ? isCollection : undefined,
+        selectable: collectionsOnly ? isCollection : true,
+        nodeType: node.type,
+        browseUrl: !collectionsOnly && isCollection ? node.browseUrl || "" : "",
         title: (
           <Space size={8} wrap>
             {isCollection ? <DatabaseOutlined /> : <FolderOutlined />}
-            <Text strong={!isCollection}>{node.name}</Text>
+            {!collectionsOnly && isCollection && node.browseUrl ? (
+              <Link
+                href={node.browseUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(event) => event.stopPropagation()}
+              >
+                {node.name}
+              </Link>
+            ) : (
+              <Text strong={!isCollection}>{node.name}</Text>
+            )}
             <Tag color={isCollection ? "blue" : "geekblue"}>
               {isCollection ? translate("collection") : translate("community")}
             </Tag>
@@ -300,6 +313,21 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
   const [publishPeriods, setPublishPeriods] = useState([]);
   const [targetCollectionId, setTargetCollectionId] = useState(null);
   const [pushCollectionModalOpen, setPushCollectionModalOpen] = useState(false);
+
+  const openDspaceCollection = (node) => {
+    const key = node?.key != null ? String(node.key) : "";
+    const synced = dspaceSyncNodes.find((item) => item.dspaceId === key);
+    const type = node?.nodeType || synced?.type;
+    if (type !== "collection") {
+      return;
+    }
+    const url = node?.browseUrl || synced?.browseUrl || "";
+    if (url) {
+      window.open(url, "_blank", "noopener,noreferrer");
+      return;
+    }
+    message.warning(t("DSpace address is not configured"));
+  };
 
   const dspaceTreeData = useMemo(() => buildDspaceTreeData(dspaceSyncNodes, { t }), [dspaceSyncNodes, t]);
   const pushCollectionTreeData = useMemo(
@@ -1455,6 +1483,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
                       treeData={dspaceTreeData}
                       expandedKeys={dspaceTreeExpandedKeys}
                       onExpand={(keys) => setDspaceTreeExpandedKeys(keys.map(String))}
+                      onSelect={(_keys, info) => openDspaceCollection(info?.node)}
                       style={{
                         background: "#fff",
                         padding: 8,
@@ -2037,6 +2066,7 @@ export default function LibraryArchivePanel({ auth, readOnly = false, canManage 
               treeData={buildDspaceTreeData(syncResult.nodes || [], { t })}
               expandedKeys={dspaceTreeExpandedKeys}
               onExpand={(keys) => setDspaceTreeExpandedKeys(keys.map(String))}
+              onSelect={(_keys, info) => openDspaceCollection(info?.node)}
               style={{ maxHeight: 420, overflow: "auto" }}
             />
           </Space>

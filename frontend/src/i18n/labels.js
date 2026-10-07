@@ -40,6 +40,10 @@ const OPTION_KEYS = {
   Thesis: "Thesis",
   Dissertation: "Dissertation",
   "Graduation thesis": "Graduation thesis",
+  "Capstone Project": "Capstone Project",
+  "PhD Dissertation": "PhD Dissertation",
+  "Master's thesis": "Master's thesis",
+  "Master thesis": "Master's thesis",
   vie: "Vietnamese (vie)",
   eng: "English (eng)"
 };
@@ -48,7 +52,8 @@ const INPUT_TYPE_KEYS = {
   text: "Text",
   textarea: "Textarea",
   select: "Select",
-  year: "Year"
+  year: "Year",
+  file: "File"
 };
 
 export function dateLocale(lang) {

@@ -24,7 +24,7 @@ import { RequirePermissions } from "../auth/permissions.decorator";
 import type { JwtPayload } from "../auth/jwt.strategy";
 import { CreateSubmissionDto } from "./dto/create-submission.dto";
 import { SaveDraftDto } from "./dto/save-draft.dto";
-import { THESIS_MAX_FILE_SIZE_BYTES, isThesisPdfUpload } from "./submission-limits";
+import { THESIS_UPLOAD_CEILING_BYTES, isThesisPdfUpload } from "./submission-limits";
 import { SubmissionFormFieldsService } from "./submission-form-fields.service";
 import { SubmissionsService } from "./submissions.service";
 
@@ -38,7 +38,7 @@ const thesisUploadInterceptor = FileInterceptor("thesisFile", {
     filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/\s+/g, "-")}`)
   }),
   limits: {
-    fileSize: THESIS_MAX_FILE_SIZE_BYTES
+    fileSize: THESIS_UPLOAD_CEILING_BYTES
   },
   fileFilter: (_req, file, cb) => {
     if (!isThesisPdfUpload(file)) {
@@ -72,6 +72,12 @@ export class SubmissionsController {
   @RequirePermissions("submit_thesis", "library_intake", "director_approval", "view_all_submissions", "configure_system")
   listFormFields() {
     return this.formFieldsService.listEnabled();
+  }
+
+  @Get("upload-limit")
+  @RequirePermissions("submit_thesis", "configure_system")
+  uploadLimit() {
+    return this.submissionsService.getThesisUploadLimit();
   }
 
   @Post()

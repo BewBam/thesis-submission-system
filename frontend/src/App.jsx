@@ -43,7 +43,6 @@ const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
 
 const THESIS_MAX_FILE_SIZE_MB = 30;
-const THESIS_MAX_FILE_SIZE_BYTES = THESIS_MAX_FILE_SIZE_MB * 1024 * 1024;
 
 function studentEmailFromUser(user) {
   if (!user?.username) {
@@ -273,7 +272,7 @@ function getStudentSubmissionCapabilities(record, currentUserId, allSubmissions 
     if (hasReviewerDecision) {
       return readOnlyCaps;
     }
-    return { canEdit: true, canDelete: true, canRevertToDraft: true, canSubmit: false };
+    return { canEdit: true, canDelete: true, canRevertToDraft: true, canSubmit: !submitBlocked };
   }
   return readOnlyCaps;
 }
@@ -296,7 +295,7 @@ function canStudentSaveDraft(allSubmissions, userId, editingRecord) {
   return !studentBlocksNewDraftOrSubmit(allSubmissions, userId, undefined);
 }
 
-function validateThesisPdf(file, t) {
+function validateThesisPdf(file, t, maxMb = THESIS_MAX_FILE_SIZE_MB) {
   const name = String(file?.name || "").toLowerCase();
   const type = String(file?.type || "").toLowerCase();
   const mimeOk = !type || type === "application/pdf" || type === "application/x-pdf";
@@ -304,8 +303,9 @@ function validateThesisPdf(file, t) {
     message.error(t("Thesis file must be PDF"));
     return false;
   }
-  if (file.size > THESIS_MAX_FILE_SIZE_BYTES) {
-    message.error(t("Thesis PDF must be at most {{n}} MB", { n: THESIS_MAX_FILE_SIZE_MB }));
+  const limitMb = Number(maxMb) > 0 ? Number(maxMb) : THESIS_MAX_FILE_SIZE_MB;
+  if (file.size > limitMb * 1024 * 1024) {
+    message.error(t("Thesis PDF must be at most {{n}} MB", { n: limitMb }));
     return false;
   }
   return true;
@@ -578,7 +578,7 @@ function App() {
   const [changingPassword, setChangingPassword] = useState(false);
   const [isSubmittingSubmission, setIsSubmittingSubmission] = useState(false);
   const [isDeletingSubmission, setIsDeletingSubmission] = useState(false);
-  const [isRevertingSubmission, setIsRevertingSubmission] = useState(false);
+  const [thesisMaxFileSizeMb, setThesisMaxFileSizeMb] = useState(THESIS_MAX_FILE_SIZE_MB);
   const [isLoadingSubmissions, setIsLoadingSubmissions] = useState(false);
   const [studentSubmissions, setStudentSubmissions] = useState([]);
   const [staffSubmissions, setStaffSubmissions] = useState([]);
@@ -792,6 +792,18 @@ function App() {
   );
 
   const loadSubmissionFormFields = async (token) => {
+    try {
+      const limitResponse = await fetch("/api/submissions/upload-limit", {
+        headers: { ...authHeaders(token) }
+      });
+      const limitPayload = await parseResponse(limitResponse);
+      const maxMb = Number(limitPayload?.maxFileSizeMb);
+      if (limitResponse.ok && Number.isFinite(maxMb) && maxMb > 0) {
+        setThesisMaxFileSizeMb(maxMb);
+      }
+    } catch {
+      // Keep the fallback size already shown in the upload area.
+    }
     try {
       const response = await fetch("/api/submissions/form-fields", {
         headers: { ...authHeaders(token) }
@@ -1084,20 +1096,6 @@ function App() {
       width: 160,
       render: (createdAt) => formatDateTime(createdAt, lang)
     },
-    {
-      title: " ",
-      key: "detail",
-      width: 110,
-      fixed: "right",
-      render: (_v, record) => (
-        <Space size={0}>
-          {isAdminActor ? (
-            <Button type="link" size="small" onClick={() => void handleAdminEditSubmission(record)}>{t("Edit")}</Button>
-          ) : null}
-          <Button type="link" size="small" onClick={() => setStaffDetailRecord(record)}>{t("Full detail")}</Button>
-        </Space>
-      )
-    }
   ];
 
   const openProtectedSubmissionFile = async (submissionId, fileId) => {
@@ -1828,7 +1826,7 @@ function App() {
     }
     const thesisFile = values.thesisFile?.[0]?.originFileObj;
     if (thesisFile) {
-      if (!validateThesisPdf(thesisFile, t)) {
+      if (!validateThesisPdf(thesisFile, t, thesisMaxFileSizeMb)) {
         return null;
       }
       formData.append("thesisFile", thesisFile);
@@ -1869,6 +1867,7 @@ function App() {
       ...defaultArchiveMetadata()
     });
     setAdminSubmissionModalOpen(true);
+    void loadSubmissionFormFields(auth.token);
   };
 
   const loadSubmissionIntoForm = async (record) => {
@@ -2157,31 +2156,11 @@ function App() {
     }
   };
 
-  const handleRevertToDraft = async () => {
-    if (!editingSubmissionId) {
-      return;
-    }
-    setIsRevertingSubmission(true);
-    try {
-      const response = await fetch(`/api/submissions/${editingSubmissionId}/revert-to-draft`, {
-        method: "POST",
-        headers: { ...authHeaders(auth.token) }
-      });
-      const payload = await parseResponse(response);
-      if (!response.ok) {
-        throw new Error(payload?.message || "Failed to revert to draft");
-      }
-      message.success(t("Reverted to draft"));
-      setEditingSubmissionStatus("draft");
-      await refreshAfterSubmissionWrite();
-    } catch (error) {
-      message.error(tr(error.message || "Failed to revert to draft"));
-    } finally {
-      setIsRevertingSubmission(false);
-    }
-  };
-
   const handleSaveDraft = async (values) => {
+    const shouldRevert =
+      auth.user.role === "student" &&
+      Boolean(editingSubmissionId) &&
+      editingSubmissionCapabilities.canRevertToDraft;
     setIsSavingDraft(true);
     try {
       const formData = buildSubmissionFormData(values, { requireThesisFile: false });
@@ -2199,11 +2178,26 @@ function App() {
       if (!response.ok) {
         throw new Error(payload?.message || "Failed to save draft");
       }
+      let reverted = false;
+      if (shouldRevert && editingSubmissionId) {
+        const revertResponse = await fetch(`/api/submissions/${editingSubmissionId}/revert-to-draft`, {
+          method: "POST",
+          headers: { ...authHeaders(auth.token) }
+        });
+        const revertPayload = await parseResponse(revertResponse);
+        if (!revertResponse.ok) {
+          throw new Error(revertPayload?.message || "Failed to revert to draft");
+        }
+        reverted = true;
+        setEditingSubmissionStatus("draft");
+      }
       if (payload?.id) {
         setEditingSubmissionId(payload.id);
-        setEditingSubmissionStatus(payload.status || "draft");
+        if (!reverted) {
+          setEditingSubmissionStatus(payload.status || "draft");
+        }
       }
-      message.success(t("Draft saved"));
+      message.success(reverted ? t("Reverted to draft") : t("Draft saved"));
       await refreshAfterSubmissionWrite();
       if (auth.user.role === "admin") {
         resetSubmissionForm();
@@ -3066,7 +3060,9 @@ function App() {
                     >
                       <Upload.Dragger
                         accept=".pdf,application/pdf"
-                        beforeUpload={(file) => (validateThesisPdf(file, t) ? false : Upload.LIST_IGNORE)}
+                        beforeUpload={(file) =>
+                          validateThesisPdf(file, t, thesisMaxFileSizeMb) ? false : Upload.LIST_IGNORE
+                        }
                         maxCount={1}
                         onPreview={(file) => {
                           if (file?.existingFileId && editingSubmissionId) {
@@ -3077,7 +3073,7 @@ function App() {
                         <p className="ant-upload-drag-icon">
                           <InboxOutlined />
                         </p>
-                        <p className="ant-upload-text">{t("Click or drag PDF thesis file here (max {{size}} MB)", { size: THESIS_MAX_FILE_SIZE_MB })}</p>
+                        <p className="ant-upload-text">{t("Click or drag PDF thesis file here (max {{size}} MB)", { size: thesisMaxFileSizeMb })}</p>
                       </Upload.Dragger>
                     </Form.Item>
 
@@ -3099,13 +3095,11 @@ function App() {
                           >
                             {editingSubmissionStatus === "rejected" ||
                             editingSubmissionStatus === "reject" ||
-                            editingSubmissionStatus === "approved"
+                            editingSubmissionStatus === "approved" ||
+                            editingSubmissionStatus === "reviewing"
                               ? t("Submit again")
                               : t("Submit thesis")}
                           </Button>
-                          {editingSubmissionId && editingSubmissionCapabilities.canRevertToDraft ? (
-                            <Button loading={isRevertingSubmission} onClick={() => void handleRevertToDraft()}>{t("Revert to draft")}</Button>
-                          ) : null}
                           {editingSubmissionId && editingSubmissionCapabilities.canDelete ? (
                             <Button
                               danger
@@ -3313,7 +3307,7 @@ function App() {
                         <>
                           <Paragraph type="secondary">
                             {t(
-                              "Open Full detail to view or delete any submission, including archived items linked to DSpace."
+                              "Click a row to view details. Edit and delete are in the detail view, including archived items linked to DSpace."
                             )}
                           </Paragraph>
                           <Space style={{ width: "100%", justifyContent: "space-between", marginBottom: 8 }}>
@@ -3339,6 +3333,10 @@ function App() {
                             loading={isLoadingSubmissions}
                             pagination={{ pageSize: 8 }}
                             scroll={{ x: 1400 }}
+                            onRow={(record) => ({
+                              onClick: () => setStaffDetailRecord(record),
+                              style: { cursor: "pointer" }
+                            })}
                           />
                           <Modal
                             title={editingSubmissionId ? t("Edit submission") : t("Create submission")}
@@ -3466,6 +3464,10 @@ function App() {
                     loading={isLoadingSubmissions}
                     pagination={{ pageSize: 8 }}
                     scroll={{ x: 1400 }}
+                    onRow={(record) => ({
+                      onClick: () => setStaffDetailRecord(record),
+                      style: { cursor: "pointer" }
+                    })}
                   />
                 </>
                       )
@@ -3578,6 +3580,8 @@ function App() {
               <Descriptions.Item label={t("Advisor(s)")}>{reviewerDetailRecord.thesis_advisors || "—"}</Descriptions.Item>
               <Descriptions.Item label={t("Major")}>{reviewerDetailRecord.major || "—"}</Descriptions.Item>
               <Descriptions.Item label={t("Year")}>{reviewerDetailRecord.thesis_year || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("University")}>{reviewerDetailRecord.university_name || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Faculty")}>{reviewerDetailRecord.faculty_name || "—"}</Descriptions.Item>
               <Descriptions.Item label={t("Date of Issue")}>
                 {reviewerDetailRecord.date_issued || reviewerDetailRecord.thesis_year || "—"}
               </Descriptions.Item>
@@ -3662,6 +3666,9 @@ function App() {
           <Space style={{ width: "100%", justifyContent: "space-between" }}>
             <div />
             <Space>
+              {isAdminActor && staffDetailRecord ? (
+                <Button onClick={() => void handleAdminEditSubmission(staffDetailRecord)}>{t("Edit")}</Button>
+              ) : null}
               {canStaffDeleteSubmission(auth?.user?.role) && staffDetailRecord ? (
                 <Button
                   danger
@@ -3692,6 +3699,8 @@ function App() {
               <Descriptions.Item label={t("Advisor(s)")}>{staffDetailRecord.thesis_advisors || "—"}</Descriptions.Item>
               <Descriptions.Item label={t("Major")}>{staffDetailRecord.major || "—"}</Descriptions.Item>
               <Descriptions.Item label={t("Year")}>{staffDetailRecord.thesis_year || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("University")}>{staffDetailRecord.university_name || "—"}</Descriptions.Item>
+              <Descriptions.Item label={t("Faculty")}>{staffDetailRecord.faculty_name || "—"}</Descriptions.Item>
               <Descriptions.Item label={t("Date of Issue")}>
                 {staffDetailRecord.date_issued || staffDetailRecord.thesis_year || "—"}
               </Descriptions.Item>

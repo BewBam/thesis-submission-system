@@ -69,7 +69,7 @@ export function getStudentSubmissionCapabilities(
       canEdit: true,
       canDelete: true,
       canRevertToDraft: true,
-      canSubmit: false
+      canSubmit: true
     };
   }
 

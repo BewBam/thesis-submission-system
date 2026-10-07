@@ -75,20 +75,20 @@ export const catalog = {
   },
   "Reviewer Workspace": { en: "Reviewer Workspace", vi: "Khu vực phản biện" },
   Refresh: { en: "Refresh", vi: "Tải lại" },
-  "Need My Review ({{count}})": { en: "Need My Review ({{count}})", vi: "Cần tôi phản biện ({{count}})" },
+  "Need My Review ({{count}})": { en: "Need My Review ({{count}})", vi: "Cần tôi duyệt ({{count}})" },
   "I Approved ({{count}})": { en: "I Approved ({{count}})", vi: "Tôi đã duyệt ({{count}})" },
   "I Rejected ({{count}})": { en: "I Rejected ({{count}})", vi: "Tôi đã từ chối ({{count}})" },
   Administration: { en: "Administration", vi: "Quản trị" },
-  Submissions: { en: "Submissions", vi: "Hồ sơ nộp" },
-  "All submissions": { en: "All submissions", vi: "Tất cả hồ sơ" },
-  "Open Full detail to view or delete any submission, including archived items linked to DSpace.": {
-    en: "Open Full detail to view or delete any submission, including archived items linked to DSpace.",
-    vi: "Mở Chi tiết đầy đủ để xem hoặc xóa mọi hồ sơ, kể cả hồ sơ đã lưu trữ gắn với DSpace."
+  Submissions: { en: "Submissions", vi: "Bài nộp" },
+  "All submissions": { en: "All submissions", vi: "Tất cả bài nộp" },
+  "Click a row to view details. Edit and delete are in the detail view, including archived items linked to DSpace.": {
+    en: "Click a row to view details. Edit and delete are in the detail view, including archived items linked to DSpace.",
+    vi: "Bấm một dòng để xem chi tiết. Sửa và xóa nằm trong cửa sổ chi tiết, kể cả bài nộp đã lưu trữ gắn với DSpace."
   },
   "Full detail": { en: "Full detail", vi: "Chi tiết đầy đủ" },
   "Create submission": { en: "Create submission", vi: "Tạo hồ sơ" },
   "Edit submission": { en: "Edit submission", vi: "Sửa hồ sơ" },
-  "Submission fields": { en: "Submission fields", vi: "Trường hồ sơ" },
+  "Submission fields": { en: "Submission fields", vi: "Cấu trúc bài nộp" },
   "Archive configuration": { en: "Archive configuration", vi: "Cấu hình lưu trữ" },
   "Approval workflow": { en: "Approval workflow", vi: "Quy trình duyệt" },
   "Intake & submissions": { en: "Intake & submissions", vi: "Tiếp nhận và hồ sơ" },
@@ -142,7 +142,7 @@ export const catalog = {
   "Workflow History": { en: "Workflow History", vi: "Lịch sử quy trình" },
   "No workflow history": { en: "No workflow history", vi: "Chưa có lịch sử quy trình" },
   "Draft details": { en: "Draft details", vi: "Chi tiết bản nháp" },
-  "Submission details": { en: "Submission details", vi: "Chi tiết hồ sơ" },
+  "Submission details": { en: "Submission details", vi: "Chi tiết bài nộp" },
   Edit: { en: "Edit", vi: "Sửa" },
   Delete: { en: "Delete", vi: "Xóa" },
   "Create a draft or submit a thesis on behalf of a student. The selected student remains the submitter.": {
@@ -450,9 +450,12 @@ export const catalog = {
   "Reason: {{reason}}": { en: "Reason: {{reason}}", vi: "Lý do: {{reason}}" },
   "No reason provided": { en: "No reason provided", vi: "Không có lý do" },
   Author: { en: "Author", vi: "Tác giả" },
-  Thesis: { en: "Thesis", vi: "Luận văn" },
-  Dissertation: { en: "Dissertation", vi: "Luận án" },
-  "Graduation thesis": { en: "Graduation thesis", vi: "Khóa luận tốt nghiệp" },
+  Thesis: { en: "Thesis", vi: "Luận văn thạc sĩ" },
+  Dissertation: { en: "Dissertation", vi: "Luận án tiến sĩ" },
+  "Graduation thesis": { en: "Graduation thesis", vi: "Đồ án tốt nghiệp" },
+  "Capstone Project": { en: "Capstone Project", vi: "Đồ án tốt nghiệp" },
+  "PhD Dissertation": { en: "PhD Dissertation", vi: "Luận án tiến sĩ" },
+  "Master's thesis": { en: "Master's thesis", vi: "Luận văn thạc sĩ" },
   "Vietnamese (vie)": { en: "Vietnamese (vie)", vi: "Tiếng Việt (vie)" },
   "English (eng)": { en: "English (eng)", vi: "Tiếng Anh (eng)" },
   "Submit thesis permission": { en: "Submit thesis", vi: "Nộp luận văn" },
@@ -560,6 +563,8 @@ export const catalog = {
   Text: { en: "Text", vi: "Văn bản" },
   Textarea: { en: "Textarea", vi: "Đoạn văn" },
   Select: { en: "Select", vi: "Danh sách chọn" },
+  File: { en: "File", vi: "Tệp" },
+  "Always on the form": { en: "Always on the form", vi: "Luôn có trên form" },
   "Default value": { en: "Default value", vi: "Giá trị mặc định" },
   "Select options": { en: "Select options", vi: "Các lựa chọn" },
   "One per line: value|Label (only for select type)": {
@@ -571,7 +576,7 @@ export const catalog = {
   "Administrator workspace: user accounts, role permissions, system and email configuration. Administrators do not approve or reject theses; they can create and submit on behalf of a student from the Submissions tab. Submission form fields are configured under Submissions.":
     {
       en: "Administrator workspace: user accounts, role permissions, system and email configuration. Administrators do not approve or reject theses; they can create and submit on behalf of a student from the Submissions tab. Submission form fields are configured under Submissions.",
-      vi: "Khu vực quản trị: tài khoản, quyền vai trò, cấu hình hệ thống và email. Quản trị viên không duyệt hay từ chối luận văn; có thể tạo và nộp thay sinh viên ở tab Hồ sơ nộp. Trường form được cấu hình trong mục Hồ sơ nộp."
+      vi: "Khu vực quản trị: tài khoản, quyền vai trò, cấu hình hệ thống và email. Quản trị viên không duyệt hay từ chối luận văn; có thể tạo và nộp thay sinh viên ở tab Bài nộp. Trường form được cấu hình trong mục Bài nộp."
     },
   "Edit user: {{name}}": { en: "Edit user: {{name}}", vi: "Sửa người dùng: {{name}}" },
   "Username is required": { en: "Username is required", vi: "Cần tên đăng nhập" },
@@ -1247,6 +1252,10 @@ export const catalog = {
   "Unable to update field": { en: "Unable to update field", vi: "Không cập nhật được trường" },
   "Unable to create field": { en: "Unable to create field", vi: "Không tạo được trường" },
   "Unable to delete field": { en: "Unable to delete field", vi: "Không xóa được trường" },
+  "DSpace address is not configured": {
+    en: "DSpace address is not configured",
+    vi: "Chưa cấu hình địa chỉ DSpace"
+  },
   "Unable to load DSpace sync tree": {
     en: "Unable to load DSpace sync tree",
     vi: "Không tải được cây đồng bộ DSpace"

@@ -10,6 +10,7 @@ export type DspaceSyncNode = {
   depth: number;
   path: string;
   rootCommunityId: string;
+  browseUrl?: string;
 };
 
 export type DspaceSyncResult = {
@@ -92,19 +93,32 @@ export class DspaceSyncService {
       );
     }
 
+    const linkedNodes = await this.withBrowseUrls(nodes);
     return {
       rootCommunityId: usedRootId,
       matchedFaculties: [],
       matchedSemesters: [],
       matchedPeriods: [],
       unmatched: [],
-      nodes,
+      nodes: linkedNodes,
       stats: {
-        total: nodes.length,
-        communities: nodes.filter((node) => node.type === "community").length,
-        collections: nodes.filter((node) => node.type === "collection").length
+        total: linkedNodes.length,
+        communities: linkedNodes.filter((node) => node.type === "community").length,
+        collections: linkedNodes.filter((node) => node.type === "collection").length
       }
     };
+  }
+
+  private async withBrowseUrls(nodes: DspaceSyncNode[]): Promise<DspaceSyncNode[]> {
+    const uiBase = await this.dspaceProvisioner.getUiBaseUrl();
+    if (!uiBase) {
+      return nodes;
+    }
+    return nodes.map((node) =>
+      node.type === "collection"
+        ? { ...node, browseUrl: `${uiBase}/collections/${node.dspaceId}` }
+        : node
+    );
   }
 
   private async listTopLevelCommunities(): Promise<Array<{ id: string; name: string }>> {
@@ -144,15 +158,17 @@ export class DspaceSyncService {
        ORDER BY depth ASC, path ASC, name ASC`,
       params
     );
-    return result.rows.map((row) => ({
-      dspaceId: row.dspace_id,
-      name: row.name,
-      type: row.node_type,
-      parentDspaceId: row.parent_dspace_id,
-      depth: row.depth,
-      path: row.path,
-      rootCommunityId: row.root_community_id
-    }));
+    return this.withBrowseUrls(
+      result.rows.map((row) => ({
+        dspaceId: row.dspace_id,
+        name: row.name,
+        type: row.node_type,
+        parentDspaceId: row.parent_dspace_id,
+        depth: row.depth,
+        path: row.path,
+        rootCommunityId: row.root_community_id
+      }))
+    );
   }
 
   private async collectNodes(
