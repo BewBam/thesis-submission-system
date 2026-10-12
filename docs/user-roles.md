@@ -32,7 +32,8 @@ Tham chiếu: [`tai-lieu-thiet-ke-he-thong.md`](./tai-lieu-thiet-ke-he-thong.md)
 - Chọn tác giả (tài khoản `student`) và người phản biện (tài khoản `reviewer`).
 - Tải lên file PDF luận văn và phụ lục (nếu có).
 - Gửi bài; xem lịch sử trạng thái và sự kiện workflow.
-- **Nộp lại** khi bài ở trạng thái `reject` (chỉnh metadata/file rồi gửi duyệt lại).
+- **Lưu nháp** khi bài đang phản biện và chưa ai quyết định: bài về `draft` và mở lại nộp.
+- **Nộp lại** khi bài `rejected`, `approved`, hoặc `reviewing` mà người nộp vẫn được phép.
 
 **Quyền hệ thống:**
 
@@ -55,9 +56,10 @@ Tham chiếu: [`tai-lieu-thiet-ke-he-thong.md`](./tai-lieu-thiet-ke-he-thong.md)
 
 **Trách nhiệm chính:**
 
-- Xem hàng đợi các bài được gán (`submission_reviewers`).
+- Xem hàng đợi các bài được gán và đang ở bước `reviewer`.
 - Phê duyệt hoặc từ chối kèm lý do (bắt buộc khi từ chối).
-- Mỗi bài có thể có nhiều reviewer; khi **tất cả** approve → bài chuyển sang `library_review`; **một** reviewer reject → bài `reject`.
+- Khi **tất cả** phản biện của bước đó duyệt, bài sang bước tiếp. **Một** người từ chối thì bài `rejected`.
+- Nếu đã có quyền nhóm, chỉ thấy và chỉ duyệt sinh viên thuộc nhóm được cấp.
 
 **Quyền hệ thống:**
 
@@ -79,20 +81,21 @@ Tham chiếu: [`tai-lieu-thiet-ke-he-thong.md`](./tai-lieu-thiet-ke-he-thong.md)
 **Trách nhiệm chính:**
 
 - **Cấu hình lưu trữ theo khoa** (dự kiến): community DSpace, sub-community học kỳ, đợt nộp — xem [`faculty-archives-and-submission-periods.md`](./faculty-archives-and-submission-periods.md).
-- Xử lý hàng đợi bài ở trạng thái `library_review` sau khi reviewer hoàn tất.
+- Xử lý hàng đợi bài đang ở bước `library_staff`. Nút trên giao diện là **Duyệt**.
 - Xác nhận đủ file (PDF toàn văn, tóm tắt nếu áp dụng, phụ lục).
-- Approve → chuyển `approving` (chờ giám đốc); reject → `reject`.
+- Duyệt thì sang bước sau, hoặc `approved` nếu đây là bước cuối. Từ chối thì `rejected`.
+- Đẩy bài `approved` hoặc `archived` lên DSpace ở tab Push to DSpace.
 
 **Quyền hệ thống:**
 
 | Hành động                              | Cho phép |
 | -------------------------------------- | -------- |
 | `GET /reviews/library-queue`           | Có |
-| `POST /reviews/library-action`         | Có (trạng thái `library_review`) |
+| `POST /reviews/library-action`         | Có (bước `library_staff`) |
 | `GET /submissions` (toàn bộ)           | Có |
 | Tải file đính kèm bài nộp              | Có |
 | `GET /users?role=...`                  | Không (chỉ student/reviewer trên form nộp) |
-| Phê duyệt cuối (`approving` → `approved`) | Không |
+| Archive ở bước cuối của giám đốc      | Không |
 
 **Giao diện:** Library intake queue, bảng all submissions.
 
@@ -104,16 +107,16 @@ Tham chiếu: [`tai-lieu-thiet-ke-he-thong.md`](./tai-lieu-thiet-ke-he-thong.md)
 
 **Trách nhiệm chính:**
 
-- Xem bài ở trạng thái `approving` (đã qua library intake).
-- Quyết định approve / reject cấp thư viện.
-- Approve → `approved` (sẵn sàng tích hợp DSpace).
+- Xem bài đang ở bước `director`.
+- Bước cuối: **Archive** → `archived` trên cổng, chưa tạo item DSpace. Bước giữa: **Approve** sang bước sau.
+- Từ chối thì `rejected`.
 
 **Quyền hệ thống:**
 
 | Hành động                         | Cho phép |
 | --------------------------------- | -------- |
 | `GET /reviews/director-queue`     | Có |
-| `POST /reviews/director-action`   | Có (trạng thái `approving`) |
+| `POST /reviews/director-action`   | Có (bước `director`) |
 | `GET /submissions` (toàn bộ)       | Có |
 | Tải file đính kèm                  | Có |
 | Cấu hình hệ thống, seed user       | Không |
@@ -132,7 +135,7 @@ Tham chiếu: [`tai-lieu-thiet-ke-he-thong.md`](./tai-lieu-thiet-ke-he-thong.md)
 | -------- | ----- |
 | **4.4.5.1 Manage users** | Tạo, sửa, vô hiệu hóa (`disabled`) tài khoản |
 | **4.4.5.2 Manage roles** | Cấu hình quyền (permissions) theo từng role |
-| **4.4.5.3 Configure system** | Cập nhật tham số hệ thống (kích thước file, timezone, maintenance mode, …) |
+| **4.4.5.3 Configure system** | Tham số hệ thống, quy trình duyệt, trường form, nhóm người dùng |
 
 **Quyền hệ thống:**
 
@@ -152,29 +155,31 @@ Tham chiếu: [`tai-lieu-thiet-ke-he-thong.md`](./tai-lieu-thiet-ke-he-thong.md)
 
 ### 3.1 Trạng thái bài nộp (`submissions.status`)
 
-| Trạng thái        | Ý nghĩa |
-| ----------------- | ------- |
-| `reviewing`       | Đang chờ reviewer |
-| `library_review`  | Đã qua reviewer; chờ cán bộ thư viện kiểm tra hồ sơ |
-| `approving`       | Đã qua library_staff; chờ giám đốc phê duyệt cuối |
-| `approved`        | Được chấp nhận; sẵn sàng tích hợp DSpace |
-| `reject`          | Bị từ chối; sinh viên có thể nộp lại |
+| Trạng thái | Ý nghĩa |
+| ---------- | ------- |
+| `draft` | Bản nháp |
+| `reviewing` | Đang chờ một bước của quy trình |
+| `approved` | Đã xong bước cuối không phải lưu trữ, hoặc đang chờ giám đốc ở bước cuối |
+| `rejected` | Bị từ chối; nộp lại thì về bước đầu |
+| `archived` | Giám đốc đã lưu ở bước cuối |
 
-### 3.2 Luồng hiện tại (đã triển khai)
+Bước đang chờ nằm ở `submissions.current_step`, không chỉ ở `status`. Mẫu bước là `workflow_steps`. Lúc nộp, hệ thống chụp vào `submission_steps`.
+
+### 3.2 Luồng mặc định
 
 ```mermaid
 flowchart LR
-  S[student: nộp bài] --> R[reviewing]
-  R -->|reviewer approve đủ| L[library_review]
-  R -->|reviewer reject| X[reject]
-  L -->|library_staff approve| A[approving]
-  L -->|library_staff reject| X
-  A -->|director approve| OK[approved]
-  A -->|director reject| X
-  X -->|student resubmit| R
+  S[student: nộp bài] --> R[bước reviewer]
+  R -->|đủ duyệt| L[bước library_staff]
+  R -->|từ chối| X[rejected]
+  L -->|Duyệt| D[bước director cuối]
+  L -->|từ chối| X
+  D -->|Archive| AR[archived]
+  D -->|từ chối| X
+  X -->|nộp lại| R
 ```
 
-**Ghi chú:** Bài đang ở `approving` trước khi nâng cấp workflow vẫn hợp lệ và do `director` (hoặc `admin`) xử lý.
+Admin thêm, xóa, đổi thứ tự bước. Vai trò chỉ là `reviewer`, `library_staff`, `director`. Bước cuối nếu không phải giám đốc thì chỉ chuyển `approved`. Push DSpace nhận cả `approved` và `archived`.
 
 ---
 
@@ -184,8 +189,8 @@ flowchart LR
 | ------------------------------------- | :-----: | :------: | :-----------: | :------: | :---: |
 | Nộp / nộp lại bài                     | ✓       |          |               |          |       |
 | Duyệt học thuật (`reviewing`)         |         | ✓        |               |          |       |
-| Kiểm tra hồ sơ (`library_review`)     |         |          | ✓             |          |       |
-| Phê duyệt cuối (`approving`)          |         |          |               | ✓        |       |
+| Kiểm tra hồ sơ (bước `library_staff`) |         |          | ✓             |          |       |
+| Bước `director`                       |         |          |               | ✓        |       |
 | Xem mọi bài nộp                       |         |          | ✓             | ✓        |       |
 | Quản lý users / roles / cấu hình      |         |          |               |          | ✓     |
 | Cấu hình khoa, học kỳ, đợt nộp       |         |          | (dự kiến)     |          |       |
@@ -240,5 +245,5 @@ Các user khác tạo qua Admin → User management. Archive (khoa/học kỳ/đ
 
 1. **Một người — một vai trò:** Không hỗ trợ đa vai trò trên cùng tài khoản; nếu cần, tạo tài khoản riêng.
 2. **Reviewer ≠ library_staff:** Reviewer đánh giá nội dung học thuật; cán bộ thư viện kiểm tra quy chế nộp lưu chiểu.
-3. **Admin vs director:** Director giữ phê duyệt nghiệp vụ cuối (`approving` → `approved`); admin chỉ quản trị users, roles, và system settings.
+3. **Admin vs director:** Director xử lý bước `director` (Archive ở bước cuối). Admin quản trị users, roles, settings, quy trình, trường form và nhóm.
 4. **Provisioning:** Production nên tạo user qua LDAP/SSO hoặc công cụ nội bộ; không dùng mật khẩu seed.

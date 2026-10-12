@@ -265,7 +265,7 @@ erDiagram
 - Tối đa **một** đợt `open` mỗi khoa (`idx_one_open_period_per_faculty`).
 - Bài không-draft: submitter phải có trong `submission_authors` (constraint trigger `trg_submitter_is_author`, deferred).
 - Index: `submissions(status)`, `submissions(student_id)`, `submissions(submission_period_id)`, `reviews(reviewer_id, decision)`.
-- File luận văn: PDF, tối đa 30 MB (`thesis_max_file_size_mb`).
+- File luận văn: PDF, dung lượng tối đa lấy từ `thesis_max_file_size_mb` (mặc định 30).
 
 ### 2.3 Nguồn schema
 
@@ -603,7 +603,7 @@ docker compose up --build
 
 ### 6.4 Ghi chú vận hành
 
-- DSpace: cấu hình `dspace_api_base_url` + `dspace_api_user` / `dspace_api_password` (auto-login). `dspace_api_token` chỉ là fallback. Director **Archive** publish item; có thể set env `DSPACE_API_*` trong `docker-compose.yml`.
+- DSpace: form chỉ sửa `dspace_api_base_url` + `dspace_api_user` / `dspace_api_password` (auto-login). `dspace_api_token` và `dspace_root_community_id` không hiện trên form. Archive không publish. Push to DSpace nhận bài `approved` và `archived`. Có thể set env `DSPACE_API_*` trong `docker-compose.yml`.
 - Upload PDF nằm trong filesystem container backend — production nên gắn volume riêng hoặc chuyển object storage / DSpace bitstream.
 - Tài khoản demo: xem [`huong-dan-su-dung-theo-vai-tro.md`](./huong-dan-su-dung-theo-vai-tro.md).
 

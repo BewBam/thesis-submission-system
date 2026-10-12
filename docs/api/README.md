@@ -22,6 +22,7 @@ Tài liệu chi tiết cho từng endpoint backend.
 | POST | `/admin/users/import/preview` | [`admin-users-import.md`](./admin-users-import.md) |
 | POST | `/admin/users/import` | [`admin-users-import.md`](./admin-users-import.md) |
 | DELETE | `/admin/users/:userId` | [`delete-admin-users.md`](./delete-admin-users.md) |
+| POST | `/admin/users/bulk-delete` | [`delete-admin-users.md`](./delete-admin-users.md) |
 | POST | `/submissions` | [`post-submissions.md`](./post-submissions.md) |
 | GET | `/submissions/student/:studentId` | [`get-submissions-student.md`](./get-submissions-student.md) |
 | GET | `/reviews/my-queue` | [`get-reviews-my-queue.md`](./get-reviews-my-queue.md) |

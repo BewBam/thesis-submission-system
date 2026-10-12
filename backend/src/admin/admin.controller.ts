@@ -28,6 +28,7 @@ import { USER_ROLES } from "../users/user-role";
 import { AdminRolesService } from "./admin-roles.service";
 import { AdminSettingsService } from "./admin-settings.service";
 import { AdminUsersService } from "./admin-users.service";
+import { BulkDeleteUsersDto } from "./dto/bulk-delete-users.dto";
 import { ConfirmImportUsersDto } from "./dto/confirm-import-users.dto";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateRolePermissionsDto } from "./dto/update-role-permissions.dto";
@@ -112,6 +113,12 @@ export class AdminController {
   @RequirePermissions("manage_users")
   updateUser(@Req() req: { user: JwtPayload }, @Param("userId") userId: string, @Body() body: UpdateUserDto) {
     return this.adminUsersService.update(req.user.sub, userId, body);
+  }
+
+  @Post("users/bulk-delete")
+  @RequirePermissions("manage_users")
+  bulkDeleteUsers(@Req() req: { user: JwtPayload }, @Body() body: BulkDeleteUsersDto) {
+    return this.adminUsersService.removeMany(req.user.sub, body.userIds);
   }
 
   @Delete("users/:userId")
@@ -208,6 +215,12 @@ export class AdminController {
   @RequirePermissions("configure_system")
   setGroupMembers(@Param("groupId") groupId: string, @Body() body: SetGroupMembersDto) {
     return this.groupsService.setMembers(groupId, body.userIds);
+  }
+
+  @Post("groups/:groupId/members")
+  @RequirePermissions("configure_system")
+  addGroupMembers(@Param("groupId") groupId: string, @Body() body: SetGroupMembersDto) {
+    return this.groupsService.addMembers(groupId, body.userIds);
   }
 
   @Put("groups/:groupId/grants")

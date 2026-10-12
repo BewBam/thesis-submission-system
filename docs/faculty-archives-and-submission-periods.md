@@ -196,7 +196,7 @@ Hỗ trợ thêm: dưới học kỳ có **sub-community đợt nộp** rồi m�
 | Thời gian | `opens_at` < `closes_at`; timezone: `Asia/Ho_Chi_Minh` (cấu hình server). |
 | Trạng thái | `draft` → `open` (thủ công hoặc cron) → `closed` (hết hạn hoặc đóng tay) → `archived` (lưu trữ cấu hình). |
 | Một đợt mở / khoa | Khuyến nghị: tối đa **một** period `open` cho mỗi `faculty_id` tại một thời điểm (tránh sinh viên chọn nhầm). Có thể nới khi khoa chạy song song đợt Thạc sĩ / Tiến sĩ (thêm trường `program` sau). |
-| Đóng đợt | Không chặn bài đang `reviewing` / `approving`; chỉ chặn **tạo mới** và có thể chặn **resubmit** nếu `allow_resubmit = false`. |
+| Đóng đợt | Không chặn bài đang `reviewing` / `approved`; chỉ chặn **tạo mới** và có thể chặn **resubmit** nếu `allow_resubmit = false`. |
 | Gắn semester | Mỗi period bắt buộc `semester_id` để xác định collection publish. |
 
 ### 6.4 Liên kết sinh viên – khoa

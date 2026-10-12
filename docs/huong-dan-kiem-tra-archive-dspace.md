@@ -74,8 +74,8 @@ Trên UI: toast “Archived and published to DSpace (…)” nếu có `dspaceIt
 Cấu hình DSpace (Admin → System settings hoặc env `DSPACE_API_*`):
 
 - `dspace_api_base_url` — từ **Docker backend** dùng `http://host.docker.internal:8080/server` (không dùng `localhost`)
-- `dspace_api_user` + `dspace_api_password` (auto-login CSRF: `GET /api/security/csrf` → `POST /api/authn/login`), hoặc `dspace_api_token` (fallback)
-- `dspace_root_community_id`
+- `dspace_api_user` + `dspace_api_password` (auto-login CSRF: `GET /api/security/csrf` → `POST /api/authn/login`)
+- Form Cài đặt DSpace không hiện `dspace_api_token` và `dspace_root_community_id`. Hai giá trị đã lưu không bị xóa khi bấm lưu.
 - Khoa/học kỳ đã provision → `semesters.dspace_collection_id` có giá trị (không phải chỉ `dev-collection-*` nếu muốn DSpace thật)
 
 ---
@@ -154,7 +154,7 @@ curl -s http://localhost:3000/admin/settings \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
-Các key liên quan: `dspace_api_base_url`, `dspace_api_user`, `dspace_api_password` (masked), `dspace_api_token` (masked), `dspace_root_community_id`.
+Form chỉ sửa `dspace_api_base_url`, `dspace_api_user`, `dspace_api_password` (masked). `dspace_api_token` và `dspace_root_community_id` vẫn có thể còn trong API settings nhưng không hiện trên form.
 
 ### 3.5 Sync từ root và kiểm tra map
 
@@ -268,7 +268,7 @@ SELECT s.id, s.status, s.dspace_item_id, sem.dspace_collection_id
 FROM submissions s
 LEFT JOIN submission_periods sp ON sp.id = s.submission_period_id
 LEFT JOIN semesters sem ON sem.id = sp.semester_id
-WHERE s.status = 'archived'
+WHERE s.status IN ('approved', 'archived')
 ORDER BY s.created_at DESC
 LIMIT 20;
 ```
@@ -277,7 +277,7 @@ LIMIT 20;
 
 ## 6. Checklist quyết định “đã vào DSpace chưa?”
 
-1. [ ] Portal: `status === "archived"`.
+1. [ ] Portal: `status` là `approved` hoặc `archived`.
 2. [ ] Portal: có `dspace_item_id`.
 3. [ ] `dspace_item_id` **không** bắt đầu bằng `dev-item-`.
 4. [ ] DSpace: `GET /api/core/items/{dspace_item_id}` trả 200.

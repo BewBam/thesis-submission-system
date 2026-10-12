@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, HttpException, Injectable, NotFoundException } from "@nestjs/common";
 import * as ExcelJS from "exceljs";
 import { createPgPool } from "../users/db-pool";
 import { isUserRole, USER_ROLES, type UserRole } from "../users/user-role";
@@ -161,6 +161,23 @@ export class AdminUsersService {
 
     await this.db.query(`DELETE FROM users WHERE username = $1`, [userId]);
     return { deleted: true, id: userId, username: row.username };
+  }
+
+  async removeMany(actorId: string, userIds: string[]) {
+    const uniqueIds = [...new Set(userIds.map((id) => id.trim()).filter(Boolean))];
+    const deleted: { id: string; username: string }[] = [];
+    const failed: { id: string; message: string }[] = [];
+
+    for (const userId of uniqueIds) {
+      try {
+        const result = await this.remove(actorId, userId);
+        deleted.push({ id: result.id, username: result.username });
+      } catch (error) {
+        failed.push({ id: userId, message: this.exceptionText(error) });
+      }
+    }
+
+    return { deleted, failed };
   }
 
   async buildImportTemplate(): Promise<Buffer> {
@@ -484,6 +501,25 @@ export class AdminUsersService {
     } catch (error) {
       return { error: error instanceof Error ? error.message : "Unable to create user" };
     }
+  }
+
+  private exceptionText(error: unknown) {
+    if (error instanceof HttpException) {
+      const response = error.getResponse();
+      if (typeof response === "string") {
+        return response;
+      }
+      if (response && typeof response === "object" && "message" in response) {
+        const message = (response as { message?: string | string[] }).message;
+        if (Array.isArray(message)) {
+          return message.join("; ");
+        }
+        if (typeof message === "string") {
+          return message;
+        }
+      }
+    }
+    return "Unable to delete user";
   }
 
   private mapAdminUser(row: UserAdminRow) {

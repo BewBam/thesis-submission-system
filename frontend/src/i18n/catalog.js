@@ -491,6 +491,67 @@ export const catalog = {
     en: "Showing {{shown}} of {{total}} users",
     vi: "Đang hiện {{shown}} / {{total}} người dùng"
   },
+  "Delete selected ({{count}})": {
+    en: "Delete selected ({{count}})",
+    vi: "Xóa đã chọn ({{count}})"
+  },
+  "Delete {{count}} selected users?": {
+    en: "Delete {{count}} selected users?",
+    vi: "Xóa {{count}} người dùng đã chọn?"
+  },
+  "Deleted {{count}} users": {
+    en: "Deleted {{count}} users",
+    vi: "Đã xóa {{count}} người dùng"
+  },
+  "Could not delete {{count}} users": {
+    en: "Could not delete {{count}} users",
+    vi: "Không xóa được {{count}} người dùng"
+  },
+  "Unable to delete users": { en: "Unable to delete users", vi: "Không xóa được người dùng" },
+  "Assign to group": { en: "Assign to group", vi: "Gán vào nhóm" },
+  "Assign {{count}} users to a group": {
+    en: "Assign {{count}} users to a group",
+    vi: "Gán {{count}} người dùng vào nhóm"
+  },
+  "Choose a group": { en: "Choose a group", vi: "Chọn nhóm" },
+  "Assigned {{count}} users to {{name}}": {
+    en: "Assigned {{count}} users to {{name}}",
+    vi: "Đã gán {{count}} người dùng vào {{name}}"
+  },
+  "Select only students or only reviewers to assign a group": {
+    en: "Select only students or only reviewers to assign a group",
+    vi: "Chỉ chọn sinh viên, hoặc chỉ chọn phản biện, để gán vào nhóm"
+  },
+  "No matching group yet. Create a {{kind}} group under User groups.": {
+    en: "No matching group yet. Create a {{kind}} group under User groups.",
+    vi: "Chưa có nhóm phù hợp. Hãy tạo nhóm {{kind}} ở mục Nhóm người dùng."
+  },
+  "Disabled accounts cannot be assigned to a group": {
+    en: "Disabled accounts cannot be assigned to a group",
+    vi: "Tài khoản đã khóa không gán vào nhóm được"
+  },
+  "Unable to assign users to a group": {
+    en: "Unable to assign users to a group",
+    vi: "Không gán người dùng vào nhóm được"
+  },
+  "Existing members stay in the group. Only students join student groups, and only reviewers join reviewer groups.": {
+    en: "Existing members stay in the group. Only students join student groups, and only reviewers join reviewer groups.",
+    vi: "Thành viên hiện có vẫn ở trong nhóm. Chỉ sinh viên vào nhóm sinh viên, và chỉ phản biện vào nhóm phản biện."
+  },
+  "Select at least one user": { en: "Select at least one user", vi: "Chọn ít nhất một người dùng" },
+  "One or more users were not found": {
+    en: "One or more users were not found",
+    vi: "Không tìm thấy một hoặc nhiều người dùng"
+  },
+  "Members of a student group must have the student role": {
+    en: "Members of a student group must have the student role",
+    vi: "Thành viên nhóm sinh viên phải có vai trò sinh viên"
+  },
+  "Members of a reviewer group must have the reviewer role": {
+    en: "Members of a reviewer group must have the reviewer role",
+    vi: "Thành viên nhóm phản biện phải có vai trò phản biện"
+  },
+  "Group not found": { en: "Group not found", vi: "Không tìm thấy nhóm" },
   "Display name": { en: "Display name", vi: "Tên hiển thị" },
   Role: { en: "Role", vi: "Vai trò" },
   Created: { en: "Created", vi: "Ngày tạo" },

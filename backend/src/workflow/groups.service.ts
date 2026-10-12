@@ -67,19 +67,7 @@ export class GroupsService {
   async setMembers(groupId: string, userIds: string[]) {
     const group = await this.requireGroup(groupId);
     const unique = Array.from(new Set(userIds.map((id) => id.trim()).filter(Boolean)));
-    if (unique.length > 0) {
-      const users = await this.db.query<{ username: string; role: string }>(
-        `SELECT username, role FROM users WHERE username = ANY($1::text[])`,
-        [unique]
-      );
-      if (users.rows.length !== unique.length) {
-        throw new BadRequestException("One or more users were not found");
-      }
-      const expected = group.kind === "student" ? "student" : "reviewer";
-      if (users.rows.some((user) => user.role !== expected)) {
-        throw new BadRequestException(`Members of a ${group.kind} group must have the ${expected} role`);
-      }
-    }
+    await this.assertMembersMatchGroup(group, unique);
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
@@ -98,6 +86,37 @@ export class GroupsService {
       client.release();
     }
     return { id: groupId, members: unique };
+  }
+
+  async addMembers(groupId: string, userIds: string[]) {
+    const group = await this.requireGroup(groupId);
+    const unique = Array.from(new Set(userIds.map((id) => id.trim()).filter(Boolean)));
+    if (unique.length === 0) {
+      throw new BadRequestException("Select at least one user");
+    }
+    await this.assertMembersMatchGroup(group, unique);
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+      for (const userId of unique) {
+        await client.query(
+          `INSERT INTO user_group_members (group_id, user_id) VALUES ($1::uuid, $2)
+           ON CONFLICT (group_id, user_id) DO NOTHING`,
+          [groupId, userId]
+        );
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    const members = await this.db.query<{ user_id: string }>(
+      `SELECT user_id FROM user_group_members WHERE group_id = $1::uuid ORDER BY user_id ASC`,
+      [groupId]
+    );
+    return { id: groupId, name: group.name, members: members.rows.map((row) => row.user_id) };
   }
 
   async setGrants(groupId: string, studentGroupIds: string[]) {
@@ -192,6 +211,23 @@ export class GroupsService {
       [studentId]
     );
     return result.rows.map((row) => row.user_id);
+  }
+
+  private async assertMembersMatchGroup(group: { kind: GroupKind }, userIds: string[]) {
+    if (userIds.length === 0) {
+      return;
+    }
+    const users = await this.db.query<{ username: string; role: string }>(
+      `SELECT username, role FROM users WHERE username = ANY($1::text[])`,
+      [userIds]
+    );
+    if (users.rows.length !== userIds.length) {
+      throw new BadRequestException("One or more users were not found");
+    }
+    const expected = group.kind === "student" ? "student" : "reviewer";
+    if (users.rows.some((user) => user.role !== expected)) {
+      throw new BadRequestException(`Members of a ${group.kind} group must have the ${expected} role`);
+    }
   }
 
   private async requireGroup(groupId: string) {

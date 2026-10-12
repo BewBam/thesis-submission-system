@@ -110,7 +110,7 @@ Remote không tạo database, không tắt DSpace, không bật server local.
 
 Test tạo user phụ và bài mới, rồi xóa các bài đó bằng API. Không xóa dữ liệu có sẵn ngoài các bài do chính test tạo.
 
-Kết quả push DSpace trên remote chấp nhận item thật, `dev-item-`, hoặc lỗi publish. Bài vẫn phải ở trạng thái `archived`.
+Kết quả push DSpace trên remote chấp nhận item thật, `dev-item-`, hoặc lỗi publish. Hàng đợi nhận bài `approved` và `archived`. Bài `reviewing` bị bỏ qua.
 
 ## Dọn dữ liệu
 

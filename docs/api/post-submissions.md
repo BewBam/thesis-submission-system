@@ -20,9 +20,9 @@ JWT payload phải có `sub` trùng với `studentId` trong body; nếu không s
 
 | Tên field    | Số file tối đa | Bắt buộc | Ghi chú |
 | ------------ | -------------- | -------- | ------- |
-| `thesisFile` | 1              | Có       | Phải là PDF (`application/pdf`). Thiếu file → **400** (`Thesis PDF is required`). Sai MIME → **400** (`Thesis file must be a PDF`). Vượt **30 MB** → **400** (`Thesis PDF must be at most 30 MB`). |
+| `thesisFile` | 1              | Có khi trường PDF đang bật và bắt buộc | Phải là PDF (`application/pdf`). Thiếu file → **400** (`Thesis PDF is required`). Sai MIME → **400** (`Thesis file must be a PDF`). Vượt `thesis_max_file_size_mb` (mặc định 30) → **400**. |
 
-Giới hạn kích thước (multer + kiểm tra server): **30 MB**.
+Giới hạn kích thước (multer + kiểm tra server): giá trị `thesis_max_file_size_mb`, mặc định **30 MB**.
 
 ### Body fields (text; thường gửi cùng multipart)
 

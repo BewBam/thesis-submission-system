@@ -189,6 +189,11 @@ export default function AdminPanel({
   const [userSearch, setUserSearch] = useState("");
   const [userRoleFilter, setUserRoleFilter] = useState("all");
   const [userStatusFilter, setUserStatusFilter] = useState("all");
+  const [selectedUserIds, setSelectedUserIds] = useState([]);
+  const [deletingUsers, setDeletingUsers] = useState(false);
+  const [assignGroupOpen, setAssignGroupOpen] = useState(false);
+  const [assignGroupId, setAssignGroupId] = useState(null);
+  const [assigningGroup, setAssigningGroup] = useState(false);
 
   const systemSettings = useMemo(
     () => settings.filter((item) => !isEmailSettingKey(item.key) && !isDspaceSettingKey(item.key)),
@@ -372,6 +377,7 @@ export default function AdminPanel({
     if (activeTab === "users") {
       void loadUsers();
       void loadFaculties();
+      void loadGroups();
     } else if (activeTab === "roles") {
       void loadRoles();
     } else if (activeTab === "form-fields") {
@@ -609,9 +615,103 @@ export default function AdminPanel({
         throw new Error(payload?.message || "Unable to delete user");
       }
       message.success(t("Deleted {{name}}", { name: record.username }));
+      setSelectedUserIds((current) => current.filter((id) => id !== record.id));
       await loadUsers();
     } catch (error) {
       message.error(tr(error.message || "Unable to delete user"));
+    }
+  };
+
+  const deleteSelectedUsers = async () => {
+    if (!selectedUserIds.length) {
+      return;
+    }
+    setDeletingUsers(true);
+    try {
+      const response = await fetch("/api/admin/users/bulk-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders(auth.token) },
+        body: JSON.stringify({ userIds: selectedUserIds })
+      });
+      const payload = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(payload?.message || "Unable to delete users");
+      }
+      const deleted = Array.isArray(payload?.deleted) ? payload.deleted : [];
+      const failed = Array.isArray(payload?.failed) ? payload.failed : [];
+      if (deleted.length) {
+        message.success(t("Deleted {{count}} users", { count: deleted.length }));
+      }
+      if (failed.length) {
+        const detail = failed.map((item) => `${item.id}: ${tr(item.message)}`).join("\n");
+        message.warning({
+          content: (
+            <span style={{ whiteSpace: "pre-line" }}>
+              {`${t("Could not delete {{count}} users", { count: failed.length })}\n${detail}`}
+            </span>
+          ),
+          duration: 8
+        });
+      }
+      const deletedIds = new Set(deleted.map((item) => item.id));
+      setSelectedUserIds((current) => current.filter((id) => !deletedIds.has(id)));
+      await loadUsers();
+    } catch (error) {
+      message.error(tr(error.message || "Unable to delete users"));
+    } finally {
+      setDeletingUsers(false);
+    }
+  };
+
+  const openAssignGroup = () => {
+    const selected = users.filter((user) => selectedUserIds.includes(user.id));
+    if (!selected.length) {
+      return;
+    }
+    if (selected.some((user) => user.status === "disabled")) {
+      message.error(t("Disabled accounts cannot be assigned to a group"));
+      return;
+    }
+    const roles = new Set(selected.map((user) => user.role));
+    const role = selected[0].role;
+    if (roles.size !== 1 || (role !== "student" && role !== "reviewer")) {
+      message.error(t("Select only students or only reviewers to assign a group"));
+      return;
+    }
+    const matching = groups.filter((group) => group.kind === role);
+    if (!matching.length) {
+      message.error(t("No matching group yet. Create a {{kind}} group under User groups.", { kind: roleText(role, t) }));
+      return;
+    }
+    setAssignGroupId(matching.length === 1 ? matching[0].id : null);
+    setAssignGroupOpen(true);
+  };
+
+  const assignSelectedUsers = async () => {
+    if (!assignGroupId || !selectedUserIds.length) {
+      message.error(t("Choose a group"));
+      return;
+    }
+    setAssigningGroup(true);
+    try {
+      const response = await fetch(`/api/admin/groups/${assignGroupId}/members`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders(auth.token) },
+        body: JSON.stringify({ userIds: selectedUserIds })
+      });
+      const payload = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(payload?.message || "Unable to assign users to a group");
+      }
+      const groupName = groups.find((group) => group.id === assignGroupId)?.name || payload?.name || "";
+      message.success(t("Assigned {{count}} users to {{name}}", { count: selectedUserIds.length, name: groupName }));
+      setAssignGroupOpen(false);
+      setSelectedUserIds([]);
+      await loadGroups();
+    } catch (error) {
+      message.error(tr(error.message || "Unable to assign users to a group"));
+    } finally {
+      setAssigningGroup(false);
     }
   };
 
@@ -859,6 +959,26 @@ export default function AdminPanel({
     setUserRoleFilter("all");
     setUserStatusFilter("all");
   };
+
+  useEffect(() => {
+    const visible = new Set(filteredUsers.map((user) => user.id));
+    const selfId = auth.user?.id;
+    setSelectedUserIds((current) => {
+      const next = current.filter((id) => visible.has(id) && id !== selfId);
+      return next.length === current.length ? current : next;
+    });
+  }, [filteredUsers, auth.user?.id]);
+
+  const selectedUserRecords = users.filter((user) => selectedUserIds.includes(user.id));
+  const assignRole =
+    selectedUserRecords.length > 0 &&
+    selectedUserRecords.every((user) => user.role === selectedUserRecords[0].role) &&
+    (selectedUserRecords[0].role === "student" || selectedUserRecords[0].role === "reviewer")
+      ? selectedUserRecords[0].role
+      : null;
+  const assignGroupOptions = groups
+    .filter((group) => group.kind === assignRole)
+    .map((group) => ({ value: group.id, label: group.name }));
 
   const userColumns = [
     { title: t("Username"), dataIndex: "username", key: "username", width: 120 },
@@ -1341,6 +1461,22 @@ export default function AdminPanel({
           <Paragraph type="secondary">{t("Create, edit, or disable user accounts (4.4.5.1).")}</Paragraph>
           <Space style={{ marginBottom: 12 }} wrap>
             <Button type="primary" onClick={openCreateUser}>{t("Create user")}</Button>
+            <Popconfirm
+              title={t("Delete {{count}} selected users?", { count: selectedUserIds.length })}
+              description={t("This cannot be undone. Users with submissions or reviews cannot be deleted.")}
+              okText={t("Delete")}
+              cancelText={t("Cancel")}
+              okButtonProps={{ danger: true }}
+              disabled={!selectedUserIds.length}
+              onConfirm={() => void deleteSelectedUsers()}
+            >
+              <Button danger disabled={!selectedUserIds.length} loading={deletingUsers}>
+                {t("Delete selected ({{count}})", { count: selectedUserIds.length })}
+              </Button>
+            </Popconfirm>
+            <Button disabled={!selectedUserIds.length || deletingUsers} onClick={openAssignGroup}>
+              {t("Assign to group")}
+            </Button>
             <Button icon={<DownloadOutlined />} loading={exportingUsers} onClick={downloadUsersExport}>{t("Export users")}</Button>
             <Button onClick={openImportUsers}>{t("Import users")}</Button>
             <Button onClick={() => loadUsers()} loading={loadingUsers}>{t("Refresh")}</Button>
@@ -1390,7 +1526,37 @@ export default function AdminPanel({
             loading={loadingUsers}
             pagination={{ pageSize: 8, showSizeChanger: true, pageSizeOptions: [8, 16, 32] }}
             scroll={{ x: 900 }}
+            rowSelection={{
+              selectedRowKeys: selectedUserIds,
+              preserveSelectedRowKeys: true,
+              onChange: (keys) => setSelectedUserIds(keys),
+              getCheckboxProps: (record) => ({
+                disabled: record.id === auth.user?.id || deletingUsers || assigningGroup
+              })
+            }}
           />
+          <Modal
+            title={t("Assign {{count}} users to a group", { count: selectedUserIds.length })}
+            open={assignGroupOpen}
+            okText={t("Assign to group")}
+            cancelText={t("Cancel")}
+            confirmLoading={assigningGroup}
+            okButtonProps={{ disabled: !assignGroupId }}
+            onOk={() => void assignSelectedUsers()}
+            onCancel={() => setAssignGroupOpen(false)}
+            destroyOnClose
+          >
+            <Paragraph type="secondary">
+              {t("Existing members stay in the group. Only students join student groups, and only reviewers join reviewer groups.")}
+            </Paragraph>
+            <Select
+              style={{ width: "100%" }}
+              value={assignGroupId}
+              onChange={setAssignGroupId}
+              options={assignGroupOptions}
+              placeholder={t("Choose a group")}
+            />
+          </Modal>
         </>
       )
     },
