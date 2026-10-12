@@ -29,12 +29,13 @@ export class WorkflowService implements OnModuleInit {
       WHERE ss.submission_id = s.id
         AND ss.sort_order = s.current_step
         AND ss.role = '${role}'
+        AND ss.done = FALSE
     )`;
   }
 
   async listTemplate(): Promise<WorkflowStep[]> {
     const result = await this.db.query<{ id: string; sort_order: number; role: WorkflowRole; label: string }>(
-      `SELECT id, sort_order, role, label FROM workflow_steps ORDER BY sort_order ASC, id ASC`
+      `SELECT id, sort_order, role, label FROM workflow_steps ORDER BY sort_order ASC, role ASC, id ASC`
     );
     return result.rows.map((row) => ({
       id: row.id,
@@ -44,27 +45,34 @@ export class WorkflowService implements OnModuleInit {
     }));
   }
 
-  async saveTemplate(steps: Array<{ role: string; label?: string }>): Promise<WorkflowStep[]> {
+  async saveTemplate(steps: Array<{ role: string; label?: string; sortOrder: number }>): Promise<WorkflowStep[]> {
     if (!Array.isArray(steps) || steps.length === 0) {
       throw new BadRequestException("Workflow must keep at least one step");
     }
+    const seen = new Set<string>();
     for (const step of steps) {
       if (!ROLES.has(step.role as WorkflowRole)) {
         throw new BadRequestException("Each step must use reviewer, library_staff, or director");
       }
+      if (!Number.isInteger(step.sortOrder) || step.sortOrder < 1) {
+        throw new BadRequestException("Order must be a positive whole number");
+      }
+      const key = `${step.sortOrder}:${step.role}`;
+      if (seen.has(key)) {
+        throw new BadRequestException("The same role cannot be used twice at the same order");
+      }
+      seen.add(key);
     }
 
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
       await client.query(`DELETE FROM workflow_steps`);
-      let order = 1;
       for (const step of steps) {
         await client.query(
           `INSERT INTO workflow_steps (id, sort_order, role, label) VALUES ($1, $2, $3, $4)`,
-          [randomUUID(), order, step.role, (step.label || "").trim()]
+          [randomUUID(), step.sortOrder, step.role, (step.label || "").trim()]
         );
-        order += 1;
       }
       await client.query("COMMIT");
     } catch (error) {
@@ -99,30 +107,34 @@ export class WorkflowService implements OnModuleInit {
     await client.query(`DELETE FROM submission_steps WHERE submission_id = $1::uuid`, [submissionId]);
     for (const step of template) {
       await client.query(
-        `INSERT INTO submission_steps (id, submission_id, sort_order, role, label)
-         VALUES ($1, $2::uuid, $3, $4, $5)`,
+        `INSERT INTO submission_steps (id, submission_id, sort_order, role, label, done)
+         VALUES ($1, $2::uuid, $3, $4, $5, FALSE)`,
         [randomUUID(), submissionId, step.sortOrder, step.role, step.label]
       );
     }
-    const first = template[0];
-    let status = "reviewing";
-    if (template.length === 1 && first.role === "director") {
-      status = "approved";
-    }
+    const orders = [...new Set(template.map((step) => step.sortOrder))].sort((a, b) => a - b);
+    const firstOrder = orders[0];
+    const firstSteps = template.filter((step) => step.sortOrder === firstOrder);
+    const maxOrder = orders[orders.length - 1];
+    const onlyFinalDirector =
+      firstOrder === maxOrder && firstSteps.length === 1 && firstSteps[0].role === "director";
+    const status = onlyFinalDirector ? "approved" : "reviewing";
     await client.query(`UPDATE submissions SET current_step = $1, status = $2 WHERE id = $3::uuid`, [
-      first.sortOrder,
+      firstOrder,
       status,
       submissionId
     ]);
-    if (first.role === "reviewer") {
+    if (firstSteps.some((step) => step.role === "reviewer")) {
       await this.resetReviewerDecisions(client, submissionId);
       const count = await this.reviewerCount(client, submissionId);
       if (count === 0) {
-        const moved = await this.advance(client, submissionId);
-        return { status: moved.toStatus, role: moved.enteredRole || first.role };
+        const moved = await this.advance(client, submissionId, "reviewer");
+        const sibling = firstSteps.find((step) => step.role !== "reviewer");
+        return { status: moved.toStatus, role: moved.enteredRole || sibling?.role || "reviewer" };
       }
     }
-    return { status, role: first.role };
+    const opened = firstSteps.find((step) => step.role === "reviewer") || firstSteps[0];
+    return { status, role: opened.role };
   }
 
   async assertCurrentRole(submissionId: string, role: WorkflowRole) {
@@ -134,10 +146,14 @@ export class WorkflowService implements OnModuleInit {
               ) AS is_last,
               s.status
        FROM submissions s
-       JOIN submission_steps ss ON ss.submission_id = s.id AND ss.sort_order = s.current_step
+       JOIN submission_steps ss
+         ON ss.submission_id = s.id
+        AND ss.sort_order = s.current_step
+        AND ss.role = $2
+        AND ss.done = FALSE
        WHERE s.id = $1::uuid
        LIMIT 1`,
-      [submissionId]
+      [submissionId, role]
     );
     const row = result.rows[0];
     if (!row || row.role !== role) {
@@ -146,11 +162,13 @@ export class WorkflowService implements OnModuleInit {
     return { isLast: Boolean(row.is_last), status: row.status };
   }
 
-  async advance(client: PoolClient, submissionId: string): Promise<{
+  async advance(client: PoolClient, submissionId: string, role: WorkflowRole): Promise<{
     fromStatus: string;
     toStatus: string;
     enteredRole: WorkflowRole | null;
+    enteredRoles: WorkflowRole[];
     archived: boolean;
+    pendingParallel: boolean;
   }> {
     const current = await client.query<{ status: string; current_step: number }>(
       `SELECT status, current_step FROM submissions WHERE id = $1::uuid LIMIT 1 FOR UPDATE`,
@@ -160,18 +178,62 @@ export class WorkflowService implements OnModuleInit {
     if (!row) {
       throw new NotFoundException("Submission not found");
     }
-    const steps = await client.query<{ sort_order: number; role: WorkflowRole }>(
-      `SELECT sort_order, role FROM submission_steps WHERE submission_id = $1::uuid ORDER BY sort_order ASC`,
+    const marked = await client.query(
+      `UPDATE submission_steps
+       SET done = TRUE
+       WHERE submission_id = $1::uuid
+         AND sort_order = $2
+         AND role = $3
+         AND done = FALSE`,
+      [submissionId, row.current_step, role]
+    );
+    if (!marked.rowCount) {
+      throw new BadRequestException("This submission is not waiting for this step");
+    }
+    return this.proceedIfOrderComplete(client, submissionId, row.status);
+  }
+
+  private async proceedIfOrderComplete(
+    client: PoolClient,
+    submissionId: string,
+    fromStatus: string
+  ): Promise<{
+    fromStatus: string;
+    toStatus: string;
+    enteredRole: WorkflowRole | null;
+    enteredRoles: WorkflowRole[];
+    archived: boolean;
+    pendingParallel: boolean;
+  }> {
+    const current = await client.query<{ status: string; current_step: number }>(
+      `SELECT status, current_step FROM submissions WHERE id = $1::uuid LIMIT 1`,
       [submissionId]
     );
-    const list = steps.rows;
-    const index = list.findIndex((step) => step.sort_order === row.current_step);
-    if (index < 0) {
-      throw new BadRequestException("Submission has no current workflow step");
+    const row = current.rows[0];
+    if (!row) {
+      throw new NotFoundException("Submission not found");
     }
-    const next = list[index + 1];
-    if (!next) {
-      if (list[index].role === "director") {
+    const steps = await client.query<{ sort_order: number; role: WorkflowRole; done: boolean }>(
+      `SELECT sort_order, role, done
+       FROM submission_steps
+       WHERE submission_id = $1::uuid
+       ORDER BY sort_order ASC, role ASC`,
+      [submissionId]
+    );
+    const here = steps.rows.filter((step) => step.sort_order === row.current_step);
+    if (here.some((step) => !step.done)) {
+      return {
+        fromStatus,
+        toStatus: row.status,
+        enteredRole: null,
+        enteredRoles: [],
+        archived: false,
+        pendingParallel: true
+      };
+    }
+    const nextOrder = steps.rows.find((step) => step.sort_order > row.current_step)?.sort_order;
+    if (nextOrder == null) {
+      if (here.some((step) => step.role === "director")) {
         await client.query(
           `UPDATE submissions
            SET status = 'archived',
@@ -179,30 +241,61 @@ export class WorkflowService implements OnModuleInit {
            WHERE id = $1::uuid`,
           [submissionId]
         );
-        return { fromStatus: row.status, toStatus: "archived", enteredRole: null, archived: true };
+        return {
+          fromStatus,
+          toStatus: "archived",
+          enteredRole: null,
+          enteredRoles: [],
+          archived: true,
+          pendingParallel: false
+        };
       }
       await client.query(`UPDATE submissions SET status = 'approved' WHERE id = $1::uuid`, [submissionId]);
-      return { fromStatus: row.status, toStatus: "approved", enteredRole: null, archived: false };
+      return {
+        fromStatus,
+        toStatus: "approved",
+        enteredRole: null,
+        enteredRoles: [],
+        archived: false,
+        pendingParallel: false
+      };
     }
 
-    let toStatus = "reviewing";
-    const nextIsLast = index + 1 === list.length - 1;
-    if (nextIsLast && next.role === "director") {
-      toStatus = "approved";
-    }
+    const nextSteps = steps.rows.filter((step) => step.sort_order === nextOrder);
+    const maxOrder = steps.rows[steps.rows.length - 1]?.sort_order ?? nextOrder;
+    const onlyFinalDirector = nextOrder === maxOrder && nextSteps.length === 1 && nextSteps[0].role === "director";
+    const toStatus = onlyFinalDirector ? "approved" : "reviewing";
     await client.query(`UPDATE submissions SET current_step = $1, status = $2 WHERE id = $3::uuid`, [
-      next.sort_order,
+      nextOrder,
       toStatus,
       submissionId
     ]);
-    if (next.role === "reviewer") {
+    const enteredRoles = nextSteps.map((step) => step.role);
+    if (enteredRoles.includes("reviewer")) {
       await this.resetReviewerDecisions(client, submissionId);
       const count = await this.reviewerCount(client, submissionId);
       if (count === 0) {
-        return this.advance(client, submissionId);
+        await client.query(
+          `UPDATE submission_steps
+           SET done = TRUE
+           WHERE submission_id = $1::uuid AND sort_order = $2 AND role = 'reviewer'`,
+          [submissionId, nextOrder]
+        );
+        return this.proceedIfOrderComplete(client, submissionId, fromStatus);
       }
     }
-    return { fromStatus: row.status, toStatus, enteredRole: next.role, archived: false };
+    return {
+      fromStatus,
+      toStatus,
+      enteredRole: enteredRoles.includes("director")
+        ? "director"
+        : enteredRoles.includes("library_staff")
+          ? "library_staff"
+          : enteredRoles[0] || null,
+      enteredRoles,
+      archived: false,
+      pendingParallel: false
+    };
   }
 
   async annotate<T extends { id: string }>(rows: T[]) {

@@ -623,7 +623,8 @@ CREATE TABLE submission_steps (
   sort_order INT NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('reviewer', 'library_staff', 'director')),
   label TEXT NOT NULL DEFAULT '',
-  UNIQUE (submission_id, sort_order)
+  done BOOLEAN NOT NULL DEFAULT FALSE,
+  UNIQUE (submission_id, sort_order, role)
 );
 
 CREATE TABLE user_groups (

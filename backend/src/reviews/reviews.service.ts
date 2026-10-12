@@ -160,6 +160,7 @@ export class ReviewsService {
     const reviewDecision = dto.action === "approve" ? "approved" : "reject";
     let allReviewersApproved = false;
     let enteredRole: string | null = null;
+    let archivedNow = false;
     const rejectReason = dto.action === "reject" ? dto.comment?.trim() || "" : "";
 
     const client = await this.db.connect();
@@ -213,8 +214,9 @@ export class ReviewsService {
         const pendingCount = pending.rows[0]?.cnt ?? 0;
         if (pendingCount === 0) {
           allReviewersApproved = true;
-          const advanced = await this.workflow.advance(client, dto.submissionId);
-          enteredRole = advanced.enteredRole;
+          const advanced = await this.workflow.advance(client, dto.submissionId, "reviewer");
+          enteredRole = advanced.enteredRoles.includes("library_staff") ? "library_staff" : advanced.enteredRole;
+          archivedNow = advanced.archived;
           await client.query(
             `INSERT INTO submission_events (id, submission_id, actor_id, actor_role, event_type, payload)
              VALUES ($1, $2, $3, 'system', 'status_changed', $4::jsonb)`,
@@ -264,6 +266,11 @@ export class ReviewsService {
         this.workflowMail.notifySafely("student_all_reviewers_approved", () =>
           this.workflowMail.notifyStudentOnAllReviewersApproved(dto.submissionId)
         );
+        if (archivedNow) {
+          this.workflowMail.notifySafely("student_director_approved", () =>
+            this.workflowMail.notifyStudentOnDirectorDecision(dto.submissionId, "approved", actorName)
+          );
+        }
       }
     }
 
@@ -388,6 +395,7 @@ export class ReviewsService {
 
     let nextStatus = dto.action === "approve" ? "approved" : "rejected";
     let enteredRole: string | null = null;
+    let archivedNow = false;
     const rejectReason = dto.action === "reject" ? dto.comment?.trim() || "" : "";
     const client = await this.db.connect();
     try {
@@ -402,9 +410,10 @@ export class ReviewsService {
       }
 
       if (dto.action === "approve") {
-        const advanced = await this.workflow.advance(client, dto.submissionId);
+        const advanced = await this.workflow.advance(client, dto.submissionId, "library_staff");
         nextStatus = advanced.toStatus;
-        enteredRole = advanced.enteredRole;
+        enteredRole = advanced.enteredRoles.includes("director") ? "director" : advanced.enteredRole;
+        archivedNow = advanced.archived;
       } else {
         await client.query(`UPDATE submissions SET status = 'rejected' WHERE id = $1::uuid`, [dto.submissionId]);
       }
@@ -453,6 +462,11 @@ export class ReviewsService {
       this.workflowMail.notifySafely("student_library_approved", () =>
         this.workflowMail.notifyStudentOnLibraryDecision(dto.submissionId, "approved", actorName)
       );
+      if (archivedNow) {
+        this.workflowMail.notifySafely("student_director_approved", () =>
+          this.workflowMail.notifyStudentOnDirectorDecision(dto.submissionId, "approved", actorName)
+        );
+      }
     } else {
       this.workflowMail.notifySafely("student_library_rejected", () =>
         this.workflowMail.notifyStudentOnLibraryDecision(
@@ -489,6 +503,7 @@ export class ReviewsService {
     }
 
     const client = await this.db.connect();
+    let archivedNow = false;
     try {
       await client.query("BEGIN");
       const current = await client.query<{ status: string }>(
@@ -504,10 +519,11 @@ export class ReviewsService {
       }
 
       if (dto.action === "archive" || dto.action === "approve") {
-        const advanced = await this.workflow.advance(client, dto.submissionId);
-        if (dto.action === "archive" && !advanced.archived) {
+        const advanced = await this.workflow.advance(client, dto.submissionId, "director");
+        if (dto.action === "archive" && !advanced.archived && !advanced.pendingParallel) {
           throw new BadRequestException("Only the final director step can archive");
         }
+        archivedNow = advanced.archived;
         const eventType = dto.action === "archive" ? "director_archived" : "director_approved";
         await client.query(
           `INSERT INTO submission_events (id, submission_id, actor_id, actor_role, event_type, payload)
@@ -575,7 +591,7 @@ export class ReviewsService {
       return { ok: true };
     }
 
-    if (dto.action === "archive") {
+    if (dto.action === "archive" && archivedNow) {
       this.workflowMail.notifySafely("student_director_approved", () =>
         this.workflowMail.notifyStudentOnDirectorDecision(dto.submissionId, "approved", actorName)
       );
@@ -584,6 +600,10 @@ export class ReviewsService {
         dspaceDeferred: true,
         message: "Archived to period. Push to DSpace later from Archive configuration."
       };
+    }
+
+    if (dto.action === "archive") {
+      return { ok: true };
     }
 
     this.workflowMail.notifySafely("student_director_rejected", () =>

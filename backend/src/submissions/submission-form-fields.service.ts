@@ -117,7 +117,7 @@ export class SubmissionFormFieldsService {
         dto.label.trim(),
         (dto.dspacePath || "").trim(),
         dto.inputType || "text",
-        dto.required === true,
+        dto.enabled !== false && dto.required === true,
         dto.enabled !== false,
         sortOrder,
         JSON.stringify(dto.options || []),
@@ -150,13 +150,18 @@ export class SubmissionFormFieldsService {
         [dto.inputType, fieldId]
       );
     }
-    if (dto.required !== undefined) {
+    if (dto.required !== undefined && dto.enabled !== false) {
       await this.db.query(
         `UPDATE submission_form_fields SET required = $1, updated_at = NOW() WHERE id = $2::uuid`,
         [dto.required, fieldId]
       );
     }
-    if (dto.enabled !== undefined) {
+    if (dto.enabled === false) {
+      await this.db.query(
+        `UPDATE submission_form_fields SET enabled = FALSE, required = FALSE, updated_at = NOW() WHERE id = $1::uuid`,
+        [fieldId]
+      );
+    } else if (dto.enabled !== undefined) {
       await this.db.query(
         `UPDATE submission_form_fields SET enabled = $1, updated_at = NOW() WHERE id = $2::uuid`,
         [dto.enabled, fieldId]

@@ -40,8 +40,30 @@ export async function ensurePortalSchema(db: Pool) {
       sort_order INT NOT NULL,
       role TEXT NOT NULL CHECK (role IN ('reviewer', 'library_staff', 'director')),
       label TEXT NOT NULL DEFAULT '',
-      UNIQUE (submission_id, sort_order)
+      done BOOLEAN NOT NULL DEFAULT FALSE,
+      UNIQUE (submission_id, sort_order, role)
     )
+  `);
+  await db.query(`ALTER TABLE submission_steps ADD COLUMN IF NOT EXISTS done BOOLEAN NOT NULL DEFAULT FALSE`);
+  await db.query(`
+    DO $$
+    DECLARE
+      cname text;
+    BEGIN
+      FOR cname IN
+        SELECT con.conname
+        FROM pg_constraint con
+        WHERE con.conrelid = 'submission_steps'::regclass
+          AND con.contype = 'u'
+          AND pg_get_constraintdef(con.oid) NOT ILIKE '%role%'
+      LOOP
+        EXECUTE format('ALTER TABLE submission_steps DROP CONSTRAINT %I', cname);
+      END LOOP;
+    END $$
+  `);
+  await db.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS submission_steps_submission_order_role_key
+    ON submission_steps (submission_id, sort_order, role)
   `);
   await db.query(`
     CREATE TABLE IF NOT EXISTS user_groups (

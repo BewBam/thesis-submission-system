@@ -42,7 +42,7 @@ BỊ TỪ CHỐI (rejected)  →  Sinh viên sửa và nộp lại (về bước
 Bài approved hoặc archived có thể đẩy ở Push to DSpace.
 ```
 
-Admin đổi thứ tự bước trong **Administration → Approval workflow**. Mỗi bước chỉ chọn `reviewer`, `library_staff` hoặc `director`. Một vai trò có thể vắng hoặc xuất hiện nhiều lần. Bài đã nộp giữ các bước lúc nộp, không đổi khi admin sửa mẫu.
+Admin đặt thứ tự từng bước trong **Administration → Approval workflow**. Nhiều vai trò có thể cùng một thứ tự và sẽ duyệt song song. Mỗi bước chỉ chọn `reviewer`, `library_staff` hoặc `director`. Một vai trò có thể vắng, hoặc xuất hiện lại ở thứ tự khác. Bài đã nộp giữ các bước lúc nộp, không đổi khi admin sửa mẫu.
 
 **Các trạng thái chính:**
 
@@ -56,13 +56,13 @@ Admin đổi thứ tự bước trong **Administration → Approval workflow**. 
 
 ### 5. Flow chính
 
-Luồng mặc định, từ lúc mở đợt đến khi bài có trên DSpace. Mỗi bước chỉ một vai trò thao tác.
+Luồng mặc định, từ lúc mở đợt đến khi bài có trên DSpace. Các vai trò cùng thứ tự duyệt song song. Thứ tự sau chỉ mở khi mọi vai trò ở thứ tự hiện tại đã xong.
 
 1. **Admin** tạo tài khoản student, reviewer, library_staff, director. Student và reviewer phải gắn khoa. **Thư viện hoặc admin** tạo học kỳ, mở đợt nộp (**open**).
 2. **Sinh viên** chọn học kỳ và đợt đang mở, điền form, chọn tác giả và phản biện, tải PDF. Có thể **Save draft** (`draft`). **Submit thesis** chụp quy trình lúc nộp và giao cho bước đầu.
-3. **Bước phản biện:** từng người được gán **Approve** hoặc **Reject** (reject bắt buộc có lý do). Một người từ chối thì bài thành `rejected`. Khi mọi người duyệt, bài sang bước tiếp. Vào một bước phản biện mới thì quyết định của bước đó về `pending`.
-4. **Bước thư viện hoặc giám đốc không phải bước cuối:** một người đúng vai trò **Duyệt** là sang bước sau. **Reject** (có lý do) thì `rejected`.
-5. **Bước cuối là giám đốc:** **Archive** → `archived` trên cổng (chưa tạo item DSpace). Nếu chuỗi không có giám đốc, bước cuối chỉ chuyển `approved`.
+3. **Bước phản biện:** từng người được gán **Approve** hoặc **Reject** (reject bắt buộc có lý do). Một người từ chối thì bài thành `rejected`. Khi mọi người duyệt, vai trò phản biện ở thứ tự đó hoàn tất. Nếu còn vai trò khác cùng thứ tự, bài chờ họ. Hết thứ tự thì sang thứ tự kế. Vào một bước phản biện mới thì quyết định của bước đó về `pending`.
+4. **Bước thư viện hoặc giám đốc không phải bước cuối:** **Duyệt** hoàn tất vai trò đó. Bài sang thứ tự sau khi mọi vai trò cùng thứ tự đã xong. **Reject** (có lý do) thì `rejected`.
+5. **Bước cuối là giám đốc:** **Archive** hoàn tất vai trò giám đốc. Nếu còn vai trò khác cùng thứ tự cuối, bài `archived` khi những vai trò đó cũng xong. Nếu chuỗi không có giám đốc, bước cuối chỉ chuyển `approved`.
 6. **Thư viện hoặc admin** mở **Archive configuration → Push to DSpace**. Hàng đợi gồm bài `approved` và `archived`. Chọn collection, rồi **Push selected**. Push thành công thì có `dspace_item_id`. Lỗi thì DSpace status vẫn là `pending` để đẩy lại. Trạng thái cổng không đổi vì push.
 
 **Nhánh rẽ**
@@ -359,7 +359,7 @@ Nhấn **Save** sau khi chỉnh sửa. Tab **Email configuration** đặt SMTP v
 - **All submissions** (Tất cả bài nộp): nhấp dòng để mở **Chi tiết bài nộp**. Nút sửa nằm trong chi tiết. **Export submissions** xuất CSV các cột đang lọc.
 - **Authors** và **Reviewers** trên form tìm theo tên hoặc username.
 - **Submission fields** (Cấu trúc bài nộp): mọi ô, kể cả khoa, đợt nộp, tác giả, phản biện và PDF, đều bật/tắt, đổi kiểu nhập và xóa được. Trường tắt không bắt buộc lúc nộp. Đúng key và đúng kiểu thì form giữ ô chọn khoa, chọn phản biện hoặc tải PDF.
-- **Approval workflow:** thêm, xóa, sắp xếp bước duyệt theo vai trò sẵn có. Phải còn ít nhất một bước.
+- **Approval workflow:** thêm, xóa bước duyệt và đặt thứ tự. Thứ tự được trùng: ví dụ reviewer, library staff và director cùng order 1 thì cả ba duyệt song song. Phải còn ít nhất một bước.
 - **User groups:** tạo nhóm sinh viên hoặc phản biện, gán user đúng vai trò (từng người trong tab này, hoặc chọn nhiều user ở **Manage users** rồi **Assign to group**), rồi chọn nhóm sinh viên mà một nhóm phản biện được duyệt. Chưa có quyền cấp nào thì cách chọn phản biện giữ như cũ.
 
 ---

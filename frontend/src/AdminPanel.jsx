@@ -9,6 +9,7 @@ import {
   Divider,
   Form,
   Input,
+  InputNumber,
   Modal,
   Popconfirm,
   Select,
@@ -173,6 +174,7 @@ export default function AdminPanel({
   const [loadingWorkflow, setLoadingWorkflow] = useState(false);
   const [savingWorkflow, setSavingWorkflow] = useState(false);
   const [newStepRole, setNewStepRole] = useState("reviewer");
+  const [newStepOrder, setNewStepOrder] = useState(1);
   const [newStepLabel, setNewStepLabel] = useState("");
   const [groups, setGroups] = useState([]);
   const [loadingGroups, setLoadingGroups] = useState(false);
@@ -184,6 +186,12 @@ export default function AdminPanel({
   const [formFieldModalOpen, setFormFieldModalOpen] = useState(false);
   const [editingFormField, setEditingFormField] = useState(null);
   const [formFieldForm] = Form.useForm();
+  const watchedFieldEnabled = Form.useWatch("enabled", formFieldForm);
+  useEffect(() => {
+    if (watchedFieldEnabled === false) {
+      formFieldForm.setFieldValue("required", false);
+    }
+  }, [watchedFieldEnabled, formFieldForm]);
   const [selectedRole, setSelectedRole] = useState("student");
   const [rolePermissions, setRolePermissions] = useState({});
   const [userSearch, setUserSearch] = useState("");
@@ -333,7 +341,11 @@ export default function AdminPanel({
         method: "PUT",
         headers: { "Content-Type": "application/json", ...authHeaders(auth.token) },
         body: JSON.stringify({
-          steps: steps.map((step) => ({ role: step.role, label: step.label || "" }))
+          steps: steps.map((step) => ({
+            role: step.role,
+            label: step.label || "",
+            sortOrder: Number(step.sortOrder) || 1
+          }))
         })
       });
       const payload = await parseResponse(response);
@@ -838,13 +850,15 @@ export default function AdminPanel({
     setSavingFormField(true);
     try {
       const options = parseOptionsText(values.optionsText);
+      const enabled = Boolean(values.enabled);
+      const required = enabled && Boolean(values.required);
       if (editingFormField) {
         const body = {
           label: values.label,
           dspacePath: values.dspacePath || "",
           inputType: values.inputType,
-          required: Boolean(values.required),
-          enabled: Boolean(values.enabled),
+          required,
+          enabled,
           sortOrder: Number(values.sortOrder) || 0,
           defaultValue: values.defaultValue || "",
           options
@@ -871,7 +885,7 @@ export default function AdminPanel({
             label: values.label,
             dspacePath: values.dspacePath || "",
             inputType: values.inputType,
-            required: Boolean(values.required),
+            required,
             enabled: Boolean(values.enabled),
             defaultValue: values.defaultValue || "",
             storage: "extra",
@@ -894,11 +908,15 @@ export default function AdminPanel({
   };
 
   const toggleFormFieldFlag = async (record, patch) => {
+    const nextPatch = patch.enabled === false ? { ...patch, required: false } : patch;
+    setFormFields((current) =>
+      current.map((field) => (field.id === record.id ? { ...field, ...nextPatch } : field))
+    );
     try {
       const response = await fetch(`/api/admin/submission-form-fields/${record.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", ...authHeaders(auth.token) },
-        body: JSON.stringify(patch)
+        body: JSON.stringify(nextPatch)
       });
       const payload = await parseResponse(response);
       if (!response.ok) {
@@ -907,6 +925,7 @@ export default function AdminPanel({
       await loadFormFields();
     } catch (error) {
       message.error(tr(error.message));
+      await loadFormFields();
     }
   };
 
@@ -1130,7 +1149,8 @@ export default function AdminPanel({
             width: 100,
             render: (v, row) => (
               <Switch
-                checked={v}
+                checked={Boolean(v) && row.enabled}
+                disabled={!row.enabled}
                 onChange={(checked) => void toggleFormFieldFlag(row, { required: checked })}
               />
             )
@@ -1142,7 +1162,9 @@ export default function AdminPanel({
             render: (v, row) => (
               <Switch
                 checked={v}
-                onChange={(checked) => void toggleFormFieldFlag(row, { enabled: checked })}
+                onChange={(checked) =>
+                  void toggleFormFieldFlag(row, checked ? { enabled: true } : { enabled: false, required: false })
+                }
               />
             )
           },
@@ -1228,7 +1250,7 @@ export default function AdminPanel({
             </Form.Item>
           ) : null}
           <Form.Item name="required" label={t("Required")} valuePropName="checked">
-            <Switch />
+            <Switch disabled={watchedFieldEnabled === false} />
           </Form.Item>
           <Form.Item name="enabled" label={t("Enabled on form")} valuePropName="checked">
             <Switch />
@@ -1238,22 +1260,19 @@ export default function AdminPanel({
   );
 
   const selectedGroup = groups.find((group) => group.id === selectedGroupId) || null;
-  const moveWorkflowStep = (index, direction) => {
-    const next = [...workflowSteps];
-    const target = index + direction;
-    if (target < 0 || target >= next.length) {
-      return;
-    }
-    const [item] = next.splice(index, 1);
-    next.splice(target, 0, item);
-    setWorkflowSteps(next);
-  };
   const workflowPanel = (
     <>
       <Paragraph type="secondary">
-        {t("Add, remove, and reorder approval steps. Each step uses an existing role. A role can be left out or used more than once. Theses already submitted keep the steps they had when they were submitted.")}
+        {t("Add or remove approval steps and set each step's order. The same order can be shared, so those roles review together. A role can be left out or used again at another order. Theses already submitted keep the steps they had when they were submitted.")}
       </Paragraph>
       <Space style={{ marginBottom: 12 }} wrap>
+        <InputNumber
+          min={1}
+          precision={0}
+          value={newStepOrder}
+          onChange={(value) => setNewStepOrder(Number(value) || 1)}
+          style={{ width: 90 }}
+        />
         <Select
           value={newStepRole}
           onChange={setNewStepRole}
@@ -1272,7 +1291,15 @@ export default function AdminPanel({
         />
         <Button
           onClick={() => {
-            setWorkflowSteps((current) => [...current, { role: newStepRole, label: newStepLabel.trim() }]);
+            setWorkflowSteps((current) => [
+              ...current,
+              {
+                role: newStepRole,
+                label: newStepLabel.trim(),
+                sortOrder: newStepOrder,
+                clientKey: `${Date.now()}-${current.length}`
+              }
+            ]);
             setNewStepLabel("");
           }}
         >{t("Add step")}</Button>
@@ -1280,28 +1307,45 @@ export default function AdminPanel({
         <Button onClick={() => void loadWorkflow()} loading={loadingWorkflow}>{t("Refresh")}</Button>
       </Space>
       <Table
-        rowKey={(row, index) => `${row.role}-${index}`}
+        rowKey={(row) => row.id || row.clientKey}
         loading={loadingWorkflow}
-        dataSource={workflowSteps}
+        dataSource={[...workflowSteps].sort((a, b) => (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0) || String(a.role).localeCompare(String(b.role)))}
         pagination={false}
         columns={[
-          { title: t("Order"), width: 80, render: (_v, _row, index) => index + 1 },
+          {
+            title: t("Order"),
+            dataIndex: "sortOrder",
+            width: 120,
+            render: (value, record) => (
+              <InputNumber
+                min={1}
+                precision={0}
+                value={value}
+                onChange={(next) => {
+                  const sortOrder = Number(next) || 1;
+                  const key = record.id || record.clientKey;
+                  setWorkflowSteps((current) =>
+                    current.map((step) => ((step.id || step.clientKey) === key ? { ...step, sortOrder } : step))
+                  );
+                }}
+              />
+            )
+          },
           { title: t("Role"), dataIndex: "role", render: (role) => roleText(role, t) },
           { title: t("Label"), dataIndex: "label", render: (label) => label || "—" },
           {
             title: t("Actions"),
-            width: 220,
-            render: (_v, _row, index) => (
-              <Space>
-                <Button size="small" disabled={index === 0} onClick={() => moveWorkflowStep(index, -1)}>{t("Up")}</Button>
-                <Button size="small" disabled={index === workflowSteps.length - 1} onClick={() => moveWorkflowStep(index, 1)}>{t("Down")}</Button>
-                <Button
-                  size="small"
-                  danger
-                  disabled={workflowSteps.length <= 1}
-                  onClick={() => setWorkflowSteps((current) => current.filter((_, itemIndex) => itemIndex !== index))}
-                >{t("Delete")}</Button>
-              </Space>
+            width: 120,
+            render: (_v, record) => (
+              <Button
+                size="small"
+                danger
+                disabled={workflowSteps.length <= 1}
+                onClick={() => {
+                  const key = record.id || record.clientKey;
+                  setWorkflowSteps((current) => current.filter((step) => (step.id || step.clientKey) !== key));
+                }}
+              >{t("Delete")}</Button>
             )
           }
         ]}

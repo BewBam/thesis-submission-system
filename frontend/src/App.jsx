@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Button,
@@ -20,8 +20,17 @@ import {
   message
 } from "antd";
 import { DownloadOutlined, InboxOutlined } from "@ant-design/icons";
+import {
+  beginLoginAttempt,
+  installAuthFetch,
+  readTokenExpiry,
+  setSessionExpiredHandler,
+  suppressApiErrors
+} from "./auth-session.js";
 import AdminPanel from "./AdminPanel.jsx";
 import LibraryArchivePanel from "./LibraryArchivePanel.jsx";
+
+installAuthFetch();
 import { translateApiMessage } from "./i18n/api";
 import { LanguageSwitch, useI18n } from "./i18n/I18nProvider";
 import {
@@ -623,6 +632,8 @@ function App() {
   const [passwordForm] = Form.useForm();
   const [submissionForm] = Form.useForm();
   const [auth, setAuth] = useState(null);
+  const sessionExpiredRef = useRef(false);
+  const expireSessionRef = useRef(() => {});
   const [loginMethod, setLoginMethod] = useState("username");
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
@@ -680,6 +691,8 @@ function App() {
   const [isSavingDraft, setIsSavingDraft] = useState(false);
 
   useEffect(() => {
+    setSessionExpiredHandler(() => expireSessionRef.current());
+
     const params = new URLSearchParams(window.location.search);
     const oauthError = params.get("error");
     const accessToken = params.get("access_token");
@@ -699,6 +712,8 @@ function App() {
     }
 
     const finishGoogleSession = async (token) => {
+      beginLoginAttempt();
+      sessionExpiredRef.current = false;
       try {
         const response = await fetch("/api/auth/me", {
           headers: authHeaders(token)
@@ -745,6 +760,24 @@ function App() {
       localStorage.removeItem(STORAGE_KEY);
     }
   }, []);
+
+  useEffect(() => {
+    const token = auth?.token;
+    if (!token) {
+      return undefined;
+    }
+    const expiresAt = readTokenExpiry(token);
+    if (!expiresAt) {
+      return undefined;
+    }
+    const delay = expiresAt - Date.now();
+    if (delay <= 0) {
+      expireSessionRef.current();
+      return undefined;
+    }
+    const timerId = window.setTimeout(() => expireSessionRef.current(), delay);
+    return () => window.clearTimeout(timerId);
+  }, [auth?.token]);
 
   useEffect(() => {
     const loadLoginOptions = async () => {
@@ -1761,6 +1794,8 @@ function App() {
   }, [auth, submissionForm]);
 
   const handleLogin = async (values) => {
+    beginLoginAttempt();
+    sessionExpiredRef.current = false;
     setIsLoggingIn(true);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
@@ -2761,7 +2796,7 @@ function App() {
     }
   };
 
-  const handleLogout = () => {
+  const clearClientSession = () => {
     setAuth(null);
     setAdminDashTab("admin");
     setStudentSubmissions([]);
@@ -2778,9 +2813,28 @@ function App() {
     setStaffPeriodFilter(undefined);
     setEditingSubmissionId(null);
     setEditingSubmissionStatus(null);
+    setPasswordModalOpen(false);
+    setAdminSubmissionModalOpen(false);
+    setRejectModalOpen(false);
+    setLibraryRejectModalOpen(false);
+    setDirectorRejectModalOpen(false);
     localStorage.removeItem(STORAGE_KEY);
     loginForm.resetFields();
     submissionForm.resetFields();
+  };
+
+  expireSessionRef.current = () => {
+    if (sessionExpiredRef.current || !localStorage.getItem(STORAGE_KEY)) {
+      return;
+    }
+    sessionExpiredRef.current = true;
+    suppressApiErrors(true);
+    clearClientSession();
+    message.warning(t("Your session has expired. Please sign in again."));
+  };
+
+  const handleLogout = () => {
+    clearClientSession();
     message.info(t("You have been logged out"));
   };
 

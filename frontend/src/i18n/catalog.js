@@ -26,6 +26,10 @@ export const catalog = {
   Dashboard: { en: "Dashboard", vi: "Bảng điều khiển" },
   "Welcome back, {{name}}.": { en: "Welcome back, {{name}}.", vi: "Chào mừng trở lại, {{name}}." },
   "You have been logged out": { en: "You have been logged out", vi: "Bạn đã đăng xuất" },
+  "Your session has expired. Please sign in again.": {
+    en: "Your session has expired. Please sign in again.",
+    vi: "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại."
+  },
   "Login successful": { en: "Login successful", vi: "Đăng nhập thành công" },
   "Login timeout. Please check backend server or Docker network.": {
     en: "Login timeout. Please check backend server or Docker network.",
@@ -1490,11 +1494,20 @@ export const catalog = {
     en: "Student groups this reviewer group may review",
     vi: "Nhóm sinh viên mà nhóm phản biện này được duyệt"
   },
-  "Add, remove, and reorder approval steps. Each step uses an existing role. A role can be left out or used more than once. Theses already submitted keep the steps they had when they were submitted.":
+  "Add or remove approval steps and set each step's order. The same order can be shared, so those roles review together. A role can be left out or used again at another order. Theses already submitted keep the steps they had when they were submitted.":
     {
-      en: "Add, remove, and reorder approval steps. Each step uses an existing role. A role can be left out or used more than once. Theses already submitted keep the steps they had when they were submitted.",
-      vi: "Thêm, xóa và sắp xếp các bước duyệt. Mỗi bước dùng một vai trò sẵn có. Một vai trò có thể không xuất hiện hoặc xuất hiện nhiều lần. Bài đã nộp giữ nguyên các bước lúc nộp."
+      en: "Add or remove approval steps and set each step's order. The same order can be shared, so those roles review together. A role can be left out or used again at another order. Theses already submitted keep the steps they had when they were submitted.",
+      vi: "Thêm hoặc xóa bước duyệt và đặt thứ tự cho từng bước. Các bước có thể trùng thứ tự để những vai trò đó duyệt cùng lúc. Một vai trò có thể không xuất hiện, hoặc xuất hiện lại ở thứ tự khác. Bài đã nộp giữ nguyên các bước lúc nộp."
     },
+  Order: { en: "Order", vi: "Thứ tự" },
+  "Order must be a positive whole number": {
+    en: "Order must be a positive whole number",
+    vi: "Thứ tự phải là số nguyên dương"
+  },
+  "The same role cannot be used twice at the same order": {
+    en: "The same role cannot be used twice at the same order",
+    vi: "Không được đặt cùng một vai trò hai lần ở cùng một thứ tự"
+  },
   "Create student and reviewer groups, assign users, then choose which student groups a reviewer group may review. Until a grant exists, reviewer selection and queues stay unchanged.":
     {
       en: "Create student and reviewer groups, assign users, then choose which student groups a reviewer group may review. Until a grant exists, reviewer selection and queues stay unchanged.",

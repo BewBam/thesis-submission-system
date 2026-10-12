@@ -1,5 +1,5 @@
 import { Type } from "class-transformer";
-import { IsArray, IsIn, IsOptional, IsString, ValidateNested } from "class-validator";
+import { IsArray, IsIn, IsInt, IsOptional, IsString, Min, ValidateNested } from "class-validator";
 
 class WorkflowStepInputDto {
   @IsIn(["reviewer", "library_staff", "director"])
@@ -8,6 +8,11 @@ class WorkflowStepInputDto {
   @IsOptional()
   @IsString()
   label?: string;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  sortOrder!: number;
 }
 
 export class SaveWorkflowDto {

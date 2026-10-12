@@ -179,7 +179,7 @@ flowchart LR
   X -->|nộp lại| R
 ```
 
-Admin thêm, xóa, đổi thứ tự bước. Vai trò chỉ là `reviewer`, `library_staff`, `director`. Bước cuối nếu không phải giám đốc thì chỉ chuyển `approved`. Push DSpace nhận cả `approved` và `archived`.
+Admin thêm, xóa bước và đặt thứ tự. Thứ tự được trùng để các vai trò duyệt song song. Vai trò chỉ là `reviewer`, `library_staff`, `director`. Bước cuối nếu không phải giám đốc thì chỉ chuyển `approved`. Push DSpace nhận cả `approved` và `archived`.
 
 ---
 
