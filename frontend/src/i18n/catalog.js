@@ -484,6 +484,36 @@ export const catalog = {
   "Create user": { en: "Create user", vi: "Tạo người dùng" },
   "Export users": { en: "Export users", vi: "Xuất người dùng" },
   "Import users": { en: "Import users", vi: "Nhập người dùng" },
+  "Assign imported users to a group": {
+    en: "Assign imported users to a group",
+    vi: "Gán người dùng vừa nhập vào nhóm"
+  },
+  "Do not assign a group": { en: "Do not assign a group", vi: "Không gán nhóm" },
+  "Existing group": { en: "Existing group", vi: "Nhóm có sẵn" },
+  "New group": { en: "New group", vi: "Nhóm mới" },
+  "Assign both roles": { en: "Assign both roles", vi: "Gán cả hai vai trò" },
+  "Choose a {{kind}} group": { en: "Choose a {{kind}} group", vi: "Chọn nhóm {{kind}}" },
+  "{{kind}} group name is required": {
+    en: "{{kind}} group name is required",
+    vi: "Cần tên nhóm {{kind}}"
+  },
+  "No matching group yet. Choose New group instead.": {
+    en: "No matching group yet. Choose New group instead.",
+    vi: "Chưa có nhóm phù hợp. Hãy chọn Nhóm mới."
+  },
+  "Group name is required": { en: "Group name is required", vi: "Cần tên nhóm" },
+  "No imported users match this group": {
+    en: "No imported users match this group",
+    vi: "Không có người dùng vừa nhập khớp với nhóm này"
+  },
+  "Group kind does not match": {
+    en: "Group kind does not match",
+    vi: "Loại nhóm không khớp vai trò"
+  },
+  "Each group kind can be chosen once": {
+    en: "Each group kind can be chosen once",
+    vi: "Mỗi vai trò chỉ chọn một nhóm"
+  },
   "Search username or display name": {
     en: "Search username or display name",
     vi: "Tìm tên đăng nhập hoặc tên hiển thị"

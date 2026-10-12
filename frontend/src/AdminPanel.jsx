@@ -12,6 +12,7 @@ import {
   InputNumber,
   Modal,
   Popconfirm,
+  Radio,
   Select,
   Space,
   Switch,
@@ -160,6 +161,16 @@ export default function AdminPanel({
   const [importPreview, setImportPreview] = useState(null);
   const [importFacultyId, setImportFacultyId] = useState(null);
   const [importResult, setImportResult] = useState(null);
+  const [importGroupMode, setImportGroupMode] = useState("none");
+  const [importGroupId, setImportGroupId] = useState(null);
+  const [importGroupName, setImportGroupName] = useState("");
+  const [importGroupKind, setImportGroupKind] = useState("student");
+  const [studentAssignMode, setStudentAssignMode] = useState("existing");
+  const [studentGroupId, setStudentGroupId] = useState(null);
+  const [studentGroupName, setStudentGroupName] = useState("");
+  const [reviewerAssignMode, setReviewerAssignMode] = useState("existing");
+  const [reviewerGroupId, setReviewerGroupId] = useState(null);
+  const [reviewerGroupName, setReviewerGroupName] = useState("");
   const [editingUser, setEditingUser] = useState(null);
   const [userForm] = Form.useForm();
   const watchedUserRole = Form.useWatch("role", userForm);
@@ -419,6 +430,17 @@ export default function AdminPanel({
   const openImportUsers = () => {
     setImportPreview(null);
     setImportResult(null);
+    setImportFacultyId(null);
+    setImportGroupMode("none");
+    setImportGroupId(null);
+    setImportGroupName("");
+    setImportGroupKind("student");
+    setStudentAssignMode("existing");
+    setStudentGroupId(null);
+    setStudentGroupName("");
+    setReviewerAssignMode("existing");
+    setReviewerGroupId(null);
+    setReviewerGroupName("");
     setImportModalOpen(true);
   };
 
@@ -490,6 +512,21 @@ export default function AdminPanel({
         throw new Error(payload?.message || "Unable to read the file");
       }
       setImportFacultyId(null);
+      setImportGroupMode("none");
+      setImportGroupId(null);
+      setImportGroupName("");
+      setStudentAssignMode("existing");
+      setStudentGroupId(null);
+      setStudentGroupName("");
+      setReviewerAssignMode("existing");
+      setReviewerGroupId(null);
+      setReviewerGroupName("");
+      const roles = new Set((payload.toImport || []).map((row) => row.role));
+      if (roles.has("reviewer") && !roles.has("student")) {
+        setImportGroupKind("reviewer");
+      } else {
+        setImportGroupKind("student");
+      }
       setImportPreview({ ...payload, fileName: file.name });
       if (!payload.toImportCount && payload.errorCount) {
         message.warning(t("No valid users to import. Check the skipped rows."));
@@ -515,6 +552,47 @@ export default function AdminPanel({
       message.warning(t("Choose a faculty for students and reviewers that have none in the file."));
       return;
     }
+    const rolesInFile = new Set(rows.map((row) => row.role));
+    const fileHasStudent = rolesInFile.has("student");
+    const fileHasReviewer = rolesInFile.has("reviewer");
+    const groupsToAssign = [];
+    const assignmentFor = (kind, mode, groupId, name) => {
+      if (mode === "existing") {
+        if (!groupId) {
+          message.warning(t("Choose a {{kind}} group", { kind: roleText(kind, t) }));
+          return false;
+        }
+        groupsToAssign.push({ kind, mode: "existing", groupId });
+        return true;
+      }
+      const trimmed = name.trim();
+      if (!trimmed) {
+        message.warning(t("{{kind}} group name is required", { kind: roleText(kind, t) }));
+        return false;
+      }
+      groupsToAssign.push({ kind, mode: "new", name: trimmed });
+      return true;
+    };
+    if (fileHasStudent && fileHasReviewer) {
+      if (importGroupMode === "assign") {
+        if (!assignmentFor("student", studentAssignMode, studentGroupId, studentGroupName)) {
+          return;
+        }
+        if (!assignmentFor("reviewer", reviewerAssignMode, reviewerGroupId, reviewerGroupName)) {
+          return;
+        }
+      }
+    } else if (importGroupMode === "existing") {
+      const kind = fileHasReviewer ? "reviewer" : "student";
+      if (!assignmentFor(kind, "existing", importGroupId, "")) {
+        return;
+      }
+    } else if (importGroupMode === "new") {
+      const kind = fileHasReviewer && !fileHasStudent ? "reviewer" : importGroupKind;
+      if (!assignmentFor(kind, "new", null, importGroupName)) {
+        return;
+      }
+    }
     setImportingUsers(true);
     try {
       const response = await fetch("/api/admin/users/import", {
@@ -532,7 +610,8 @@ export default function AdminPanel({
             };
             if (row.password) user.password = row.password;
             return user;
-          })
+          }),
+          ...(groupsToAssign.length ? { groups: groupsToAssign } : {})
         })
       });
       const payload = await parseResponse(response);
@@ -543,7 +622,23 @@ export default function AdminPanel({
       setImportPreview(null);
       if (payload.createdCount > 0) {
         message.success(t("Imported {{count}} user(s)", { count: payload.createdCount }));
+        const assignedGroups = Array.isArray(payload.groups) ? payload.groups : [];
+        for (const assigned of assignedGroups) {
+          if (assigned.assignedCount) {
+            message.success(
+              t("Assigned {{count}} users to {{name}}", {
+                count: assigned.assignedCount,
+                name: assigned.name
+              })
+            );
+          } else if (assigned.error) {
+            message.warning(tr(assigned.error));
+          }
+        }
         await loadUsers();
+        if (assignedGroups.some((assigned) => assigned.id)) {
+          await loadGroups();
+        }
       } else {
         message.warning(t("No users imported. Check the error list."));
       }
@@ -1713,6 +1808,28 @@ export default function AdminPanel({
     return true;
   });
 
+  const importRows = importPreview?.toImport || [];
+  const importHasStudent = importRows.some((row) => row.role === "student");
+  const importHasReviewer = importRows.some((row) => row.role === "reviewer");
+  const importGroupOptions = groups
+    .filter((group) => {
+      if (importHasStudent && !importHasReviewer) {
+        return group.kind === "student";
+      }
+      if (importHasReviewer && !importHasStudent) {
+        return group.kind === "reviewer";
+      }
+      return group.kind === "student" || group.kind === "reviewer";
+    })
+    .map((group) => ({
+      value: group.id,
+      label: `${group.name} (${roleText(group.kind, t)})`
+    }));
+  const groupsByKind = (kind) =>
+    groups
+      .filter((group) => group.kind === kind)
+      .map((group) => ({ value: group.id, label: group.name }));
+
   return (
     <>
       <Paragraph type="secondary">
@@ -1850,6 +1967,111 @@ export default function AdminPanel({
                 options={faculties.map((faculty) => ({ value: faculty.id, label: faculty.name }))}
               />
             </Form.Item>
+          </Form>
+        ) : null}
+        {importPreview?.toImport?.length && (importHasStudent || importHasReviewer) ? (
+          <Form layout="vertical" style={{ marginBottom: 16, maxWidth: 520 }}>
+            <Form.Item label={t("Assign imported users to a group")} style={{ marginBottom: 8 }}>
+              <Radio.Group value={importGroupMode} onChange={(event) => setImportGroupMode(event.target.value)}>
+                <Radio value="none">{t("Do not assign a group")}</Radio>
+                {importHasStudent && importHasReviewer ? (
+                  <Radio value="assign">{t("Assign both roles")}</Radio>
+                ) : null}
+                {importHasStudent && importHasReviewer ? null : (
+                  <Radio value="existing">{t("Existing group")}</Radio>
+                )}
+                {importHasStudent && importHasReviewer ? null : (
+                  <Radio value="new">{t("New group")}</Radio>
+                )}
+              </Radio.Group>
+            </Form.Item>
+            {importHasStudent && importHasReviewer && importGroupMode === "assign" ? (
+              <Space direction="vertical" style={{ width: "100%" }} size="middle">
+                {[
+                  {
+                    kind: "student",
+                    mode: studentAssignMode,
+                    setMode: setStudentAssignMode,
+                    groupId: studentGroupId,
+                    setGroupId: setStudentGroupId,
+                    name: studentGroupName,
+                    setName: setStudentGroupName
+                  },
+                  {
+                    kind: "reviewer",
+                    mode: reviewerAssignMode,
+                    setMode: setReviewerAssignMode,
+                    groupId: reviewerGroupId,
+                    setGroupId: setReviewerGroupId,
+                    name: reviewerGroupName,
+                    setName: setReviewerGroupName
+                  }
+                ].map((item) => (
+                  <div key={item.kind}>
+                    <Text strong>{roleText(item.kind, t)}</Text>
+                    <Radio.Group
+                      value={item.mode}
+                      onChange={(event) => item.setMode(event.target.value)}
+                      style={{ display: "block", margin: "4px 0 8px" }}
+                    >
+                      <Radio value="existing">{t("Existing group")}</Radio>
+                      <Radio value="new">{t("New group")}</Radio>
+                    </Radio.Group>
+                    {item.mode === "existing" ? (
+                      <Select
+                        showSearch
+                        optionFilterProp="label"
+                        placeholder={t("Choose a {{kind}} group", { kind: roleText(item.kind, t) })}
+                        value={item.groupId || undefined}
+                        onChange={item.setGroupId}
+                        options={groupsByKind(item.kind)}
+                        style={{ width: "100%" }}
+                        notFoundContent={t("No matching group yet. Choose New group instead.")}
+                      />
+                    ) : (
+                      <Input
+                        value={item.name}
+                        onChange={(event) => item.setName(event.target.value)}
+                        placeholder={t("Group name")}
+                      />
+                    )}
+                  </div>
+                ))}
+              </Space>
+            ) : null}
+            {!(importHasStudent && importHasReviewer) && importGroupMode === "existing" ? (
+              <Form.Item style={{ marginBottom: 0 }}>
+                <Select
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder={t("Choose a group")}
+                  value={importGroupId || undefined}
+                  onChange={setImportGroupId}
+                  options={importGroupOptions}
+                  notFoundContent={t("No matching group yet. Choose New group instead.")}
+                />
+              </Form.Item>
+            ) : null}
+            {!(importHasStudent && importHasReviewer) && importGroupMode === "new" ? (
+              <Space wrap>
+                <Input
+                  value={importGroupName}
+                  onChange={(event) => setImportGroupName(event.target.value)}
+                  placeholder={t("Group name")}
+                  style={{ minWidth: 220 }}
+                />
+                <Select
+                  value={importGroupKind}
+                  onChange={setImportGroupKind}
+                  disabled={importHasStudent !== importHasReviewer}
+                  style={{ minWidth: 160 }}
+                  options={[
+                    ...(importHasStudent ? [{ value: "student", label: roleText("student", t) }] : []),
+                    ...(importHasReviewer ? [{ value: "reviewer", label: roleText("reviewer", t) }] : [])
+                  ]}
+                />
+              </Space>
+            ) : null}
           </Form>
         ) : null}
         {importPreview ? (

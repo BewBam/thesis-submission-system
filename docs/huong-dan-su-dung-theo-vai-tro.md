@@ -307,7 +307,7 @@ Giám đốc chỉ **xem** cấu hình khoa, học kỳ, đợt nộp — **khô
 | Thao tác | Mô tả |
 |----------|--------|
 | Create user | Tạo tài khoản (username, mật khẩu, tên hiển thị, vai trò). Student và reviewer bắt buộc chọn **faculty** |
-| Import | Nhập nhiều tài khoản từ file; xem trước rồi xác nhận. Student/reviewer thiếu khoa trong file thì chọn khoa chung lúc import |
+| Import | Nhập nhiều tài khoản từ file; xem trước rồi xác nhận. Student/reviewer thiếu khoa trong file thì chọn khoa chung lúc import. File một vai trò thì gán vào một nhóm có sẵn hoặc tạo nhóm mới. File lẫn sinh viên và phản biện thì chọn hoặc tạo hai nhóm, mỗi vai trò một nhóm |
 | Edit | Sửa thông tin, khoa, vai trò, kích hoạt/vô hiệu hóa |
 | Delete | Xóa một tài khoản, hoặc chọn nhiều dòng rồi **Delete selected**. Không xóa được chính mình, admin đang hoạt động cuối cùng, hoặc tài khoản đã có hồ sơ / phản biện |
 | Assign to group | Chọn nhiều sinh viên hoặc nhiều phản biện, rồi gán vào nhóm đúng loại. Thành viên đang có trong nhóm được giữ lại |

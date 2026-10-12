@@ -68,3 +68,16 @@ Admin xác nhận. Body JSON, tối đa 5000 user:
 ```
 
 `password` tùy chọn, ít nhất 6 ký tự. Có mật khẩu thì `auth_source=local`; không có thì mật khẩu trống và `auth_source=google` (`username@hcmut.edu.vn`).
+
+`groups` tùy chọn, tối đa 2 phần tử, mỗi `kind` một lần. Gán user vừa tạo đúng vai trò vào nhóm có sẵn hoặc nhóm mới:
+
+```json
+{
+  "groups": [
+    { "kind": "student", "mode": "existing", "groupId": "uuid" },
+    { "kind": "reviewer", "mode": "new", "name": "Reviewers 2026" }
+  ]
+}
+```
+
+`kind` là `student` hoặc `reviewer`. File lẫn hai vai trò gửi cả hai phần tử. Nhóm có sẵn phải đúng `kind`. Kết quả thêm `groups[]` với `assignedCount`, `name` và `error` nếu một nhóm không gán được; user vẫn được tạo.

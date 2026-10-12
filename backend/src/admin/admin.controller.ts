@@ -5,6 +5,7 @@ import {
   Delete,
   Get,
   Header,
+  HttpException,
   Param,
   Patch,
   Post,
@@ -29,7 +30,7 @@ import { AdminRolesService } from "./admin-roles.service";
 import { AdminSettingsService } from "./admin-settings.service";
 import { AdminUsersService } from "./admin-users.service";
 import { BulkDeleteUsersDto } from "./dto/bulk-delete-users.dto";
-import { ConfirmImportUsersDto } from "./dto/confirm-import-users.dto";
+import { ConfirmImportUsersDto, ImportGroupAssignmentDto } from "./dto/confirm-import-users.dto";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateRolePermissionsDto } from "./dto/update-role-permissions.dto";
 import { UpdateSettingsDto } from "./dto/update-settings.dto";
@@ -38,6 +39,25 @@ import { CreateGroupDto, SetGroupGrantsDto, SetGroupMembersDto } from "../workfl
 import { SaveWorkflowDto } from "../workflow/dto/save-workflow.dto";
 import { GroupsService } from "../workflow/groups.service";
 import { WorkflowService } from "../workflow/workflow.service";
+
+function importGroupErrorText(error: unknown) {
+  if (error instanceof HttpException) {
+    const response = error.getResponse();
+    if (typeof response === "string") {
+      return response;
+    }
+    if (response && typeof response === "object" && "message" in response) {
+      const message = (response as { message?: string | string[] }).message;
+      if (Array.isArray(message)) {
+        return message.join("; ");
+      }
+      if (typeof message === "string") {
+        return message;
+      }
+    }
+  }
+  return "Unable to assign users to a group";
+}
 
 @Controller("admin")
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -105,8 +125,24 @@ export class AdminController {
 
   @Post("users/import")
   @RequirePermissions("manage_users")
-  confirmImportUsers(@Body() body: ConfirmImportUsersDto) {
-    return this.adminUsersService.confirmImport(body.users);
+  async confirmImportUsers(@Body() body: ConfirmImportUsersDto) {
+    const result = await this.adminUsersService.confirmImport(body.users);
+    const requested = body.groups || [];
+    if (!requested.length) {
+      return result;
+    }
+    const seen = new Set<string>();
+    for (const item of requested) {
+      if (seen.has(item.kind)) {
+        throw new BadRequestException("Each group kind can be chosen once");
+      }
+      seen.add(item.kind);
+    }
+    const groups = [];
+    for (const item of requested) {
+      groups.push(await this.assignImportedGroup(item, result.created));
+    }
+    return { ...result, groups };
   }
 
   @Patch("users/:userId")
@@ -227,5 +263,51 @@ export class AdminController {
   @RequirePermissions("configure_system")
   setGroupGrants(@Param("groupId") groupId: string, @Body() body: SetGroupGrantsDto) {
     return this.groupsService.setGrants(groupId, body.studentGroupIds);
+  }
+
+  private async assignImportedGroup(
+    group: ImportGroupAssignmentDto,
+    created: Array<{ username: string; role: string }>
+  ) {
+    try {
+      const groups = await this.groupsService.list();
+      const target =
+        group.mode === "existing"
+          ? groups.find((item) => item.id === group.groupId)
+          : null;
+      if (group.mode === "existing" && !target) {
+        throw new BadRequestException("Group not found");
+      }
+      if (group.mode === "existing" && target && target.kind !== group.kind) {
+        throw new BadRequestException("Group kind does not match");
+      }
+      const kind = group.kind;
+      const usernames = created.filter((user) => user.role === kind).map((user) => user.username);
+      if (!usernames.length) {
+        return {
+          assignedCount: 0,
+          skippedCount: created.length,
+          error: "No imported users match this group"
+        };
+      }
+      const saved =
+        group.mode === "new"
+          ? await this.groupsService.create(group.name || "", kind)
+          : { id: target!.id, name: target!.name, kind };
+      await this.groupsService.addMembers(saved.id, usernames);
+      return {
+        id: saved.id,
+        name: saved.name,
+        kind: saved.kind,
+        assignedCount: usernames.length,
+        skippedCount: created.length - usernames.length
+      };
+    } catch (error) {
+      return {
+        assignedCount: 0,
+        skippedCount: created.length,
+        error: importGroupErrorText(error)
+      };
+    }
   }
 }
